@@ -236,6 +236,18 @@ class Dependencies(object):
 #
 # -----------------------------------------------------------------------------
 
+def list( args, recursive=True, resolve=False ):
+	"""Lists all the dependencies listed in the given files."""
+	deps = Dependencies()
+	res  = None
+	for _ in args:
+		r = (deps.fromPath(_, recursive=recursive))
+		if not res:
+			res = r
+		else:
+			res.update(r)
+	return res["requires"]
+
 def run( args, recursive=False ):
 	"""Extracts the dependencies of the given files."""
 	deps = Dependencies()
