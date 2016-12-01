@@ -20,8 +20,8 @@ $ deparse lib/js/*.js
 
 Language support:
 
-- C 
-- JS (UMD, AMD, CommonJS, Google)
+- C (non-recursive)
+- JS (UMD, AMD, CommonJS, Google) (non-recursive)
 - [Paml](https://github.com/sebastien/paml)
 - [Sugar](https://github.com/sebastien/sugar)
 

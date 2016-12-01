@@ -6,10 +6,18 @@
 # License           : BSD License
 # -----------------------------------------------------------------------------
 # Creation date     : 2016-11-25
-# Last modification : 2016-11-30
+# Last modification : 2016-12-01
 # -----------------------------------------------------------------------------
 
+from __future__ import print_function
+
 import sys, os, re, glob, argparse, fnmatch
+
+try:
+	import reporter
+	logging = reporter.bind("deparse")
+except ImportError as e:
+	import logging
 
 VERSION = "0.0.0"
 LICENSE = "http://ffctn.com/doc/licenses/bsd"
@@ -37,12 +45,14 @@ class LineParser(object):
 	def parsePath( self, path ):
 		self.path = path
 		with open(path) as f:
+			self.onParse(path)
 			for line in f.readlines():
 				self.parseLine(line)
 		self.path = None
 		return self
 
-	def parse( self, text ):
+	def parse( self, text, path=None ):
+		self.onParse(path or self.path)
 		for line in text.split("\n"):
 			self.parseLine(line)
 		return self
@@ -57,6 +67,99 @@ class LineParser(object):
 				getattr(self, name)(line, match)
 				break
 		return self
+
+	def onParse( self, path ):
+		pass
+
+# -----------------------------------------------------------------------------
+#
+# C PARSER
+#
+# -----------------------------------------------------------------------------
+
+class C(LineParser):
+	"""Dependency parser for C files."""
+
+	LINES = {
+		"onInclude"  : "^\s*#include\s+[<\"]([^\>\"]+)[>\"]",
+	}
+
+	def onParse( self, path ):
+		module = os.path.basename(path).rsplit("-",1)[0]
+		self.provides = [("c:header", module)]
+
+	def onInclude( self, line, match ):
+		self.requires.append(("c:header",match.group(1)))
+
+# -----------------------------------------------------------------------------
+#
+# JAVASCRIPT PARSER
+#
+# -----------------------------------------------------------------------------
+
+class JavaScript(LineParser):
+	"""Dependency parser for JavaScript files."""
+
+	# SEE: https://github.com/google/closure-library/wiki/goog.module:-an-ES6-module-like-alternative-to-goog.provide
+	LINES = {
+		"onRequire" : "(var\s+|exports\.)([\w\d_]+)\s*=\s*require\s*\(([^\)]+)\)(\.([\w\d_]+))?(\.([\w\d_]+))?\s*;?",
+		"onImport"  : "\s*import\s+({[^}]*}|\*(\s+as\s+[_\-\w]+)|[_\-\w]+)\s*(from\s+['\"]([^'\"]+)['\"])?",
+		"onGoogleProvide" : "goog\.(provide|module)\s*\(['\"](^['\"]+)['\"]\)",
+		"onGoogleRequire" : "goog\.require\s*\(['\"](^['\"]+)['\"]\)",
+	}
+
+	def onParse( self, path ):
+		module = os.path.basename(path).rsplit("-",1)[0]
+		self.provides = [("js:module", module)]
+
+	def onRequire( self, line, match ):
+		decl, name, module, __, symbol, __, subsymbol = match.groups()
+		self.requires.append(("js:module", module))
+
+	def onGoogleProvide( self, line, match ):
+		self.provides.append(("js:module", match.group(1)))
+
+	def onGoogleRequire( self, line, match ):
+		self.requires.append(("js:module", match.group(1)))
+
+	def onImport( self, line, match ):
+		module = match.groups()[-1]
+		if not module:
+			return
+		if module.startswith("."):
+			path = os.path.normpath(os.path.join(os.path.dirname(self.path or "."), module))
+			self.requires.append(("js:file", path))
+		else:
+			self.requires.append(("js:module", module))
+
+# -----------------------------------------------------------------------------
+#
+# SUGAR PARSER
+#
+# -----------------------------------------------------------------------------
+
+class Sugar(LineParser):
+	"""Dependency parser for Sugar files."""
+
+	LINES = {
+		"onModule"  : "^@module\s+([^\s]+)",
+		"onImport"  : "^@import",
+	}
+
+	def __init__( self ):
+		super(Sugar, self).__init__()
+		self.requires = [("js:module", "extend")]
+
+	def onModule( self, line, match ):
+		self.provides.append(("js:module",match.group(1)))
+
+	def onImport( self, line, match ):
+		line = line[len(match.group()):]
+		if " from " in line: line = line.split(" from ", 1)[1]
+		for _ in line.split(","):
+			_ = _.strip()
+			if _:
+				self.requires.append(("js:module",_))
 
 # -----------------------------------------------------------------------------
 #
@@ -92,52 +195,6 @@ class Paml(LineParser):
 		line = line.split("+",1)[0].strip
 		self.requires.append(("paml:file", line))
 
-# -----------------------------------------------------------------------------
-#
-# SUGAR PARSER
-#
-# -----------------------------------------------------------------------------
-
-class Sugar(LineParser):
-	"""Dependency parser for Sugar files."""
-
-	LINES = {
-		"onModule"  : "^@module\s+([^\s]+)",
-		"onImport"  : "^@import",
-	}
-
-	def __init__( self ):
-		super(Sugar, self).__init__()
-		self.requires = [("js:module", "extend")]
-
-	def onModule( self, line, match ):
-		self.provides.append(("js:module",match.group(1)))
-
-	def onImport( self, line, match ):
-		line = line[len(match.group()):]
-		if " from " in line: line = line.split(" from ", 1)[1]
-		for _ in line.split(","):
-			_ = _.strip()
-			if _:
-				self.requires.append(("js:module",_))
-
-# -----------------------------------------------------------------------------
-#
-# JAVASCRIPT PARSER
-#
-# -----------------------------------------------------------------------------
-
-class JavaScript(LineParser):
-	"""Dependency parser for JavaScript files."""
-
-	LINES = {
-	}
-
-	def parsePath( self, path ):
-		module = os.path.basename(path).rsplit("-",1)[0]
-		self.provides = [("js:module", module)]
-		self.requires = []
-		return self
 
 # -----------------------------------------------------------------------------
 #
@@ -148,10 +205,15 @@ class JavaScript(LineParser):
 class Dependencies(object):
 	"""Extracts and aggregates dependencies."""
 
-	FILE_TYPES = {
+	PARSERS = {
 		"paml" : Paml,
 		"sjs"  : Sugar,
-		"js"   : JavaScript
+		"js"   : JavaScript,
+		"c"    : C,
+		"cxx"  : C,
+		"c++"  : C,
+		"cpp"  : C,
+		"h"    : C,
 	}
 
 	def __init__( self ):
@@ -194,10 +256,13 @@ class Dependencies(object):
 			return [self._fromPath(_, recursive=recursive) for _ in paths]
 		elif path in self.paths:
 			return self
+		elif os.path.isdir(path):
+			# We skip directories
+			pass
 		else:
 			self.paths.append(path)
-			ext      = path.rsplit(".",1)[1].lower()
-			parser   = self.FILE_TYPES[ext]().parsePath(path)
+			ext      = path.rsplit(".",1)[-1].lower()
+			parser   = self.PARSERS[ext]().parsePath(path)
 			self.provides.append((path, parser.provides))
 			self.requires = self._merge(self.requires, parser.requires)
 			# We register the nodes
@@ -221,6 +286,7 @@ class Dependencies(object):
 		one file)."""
 		t, name = item
 		res     = ()
+		# TODO: Support resolvers
 		if t == "js:module":
 			js_modules  = sorted([_ for _ in glob.glob("lib/js/{0}-*.js".format(name))  if ".gmodules" not in _])
 			sjs_modules = sorted([_ for _ in glob.glob("lib/sjs/{0}.sjs".format(name)) + glob.glob("lib/sjs/{0}*-*.sjs".format(name))])
@@ -242,7 +308,7 @@ class Dependencies(object):
 		requires = sorted(requires, key=lambda _:len(self.nodes.get(_) or ()))
 		def load(module, loaded=loaded):
 			if module in loaded: return
-			for required in self.nodes[module]:
+			for required in self.nodes.get(module) or ():
 				# NOTE: This is a bug, the modules should not import themselves
 				if required == module: continue
 				load(required, loaded)
@@ -290,8 +356,10 @@ def command( args, name=None ):
 		prog        = name or os.path.basename(__file__.split(".")[0]),
 		description = "Lists dependencies from PAML and Sugar files"
 	)
+	# TODO: Rework command lines arguments, we want something that follows
+	# common usage patterns.
 	oparser.add_argument("files", metavar="FILE", type=str, nargs='+', help='The files to extract dependencies from')
-	oparser.add_argument("-o", "--output",    type=str,  dest="output", default="-")
+	oparser.add_argument("-o", "--output",    type=str,  dest="output", default="-", help="Specifies an output file")
 	oparser.add_argument("-t", "--type",      type=str,  dest="types",  nargs="+", default=("*",))
 	oparser.add_argument("-r", "--recursive", dest="recursive",  action="store_true", default=False)
 	oparser.add_argument("-p", "--path",      dest="show_path",  action="store_true", default=False)
