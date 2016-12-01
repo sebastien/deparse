@@ -15,7 +15,10 @@ from distutils.core import setup
 NAME        = "deparse"
 VERSION     = "0.1.0"
 WEBSITE     = "http://github.com/sebastien/deparse/" + NAME.lower()
-SUMMARY     = "Multi-language dependency parsing tool and API"
+SUMMARY     = "Multi-language dependency parsing tool & API"
+DESCRIPTION = """\
+*Deparse* is both a command-line tool and Python module to parse and list
+dependencies in a language-independent way."""
 
 # ------------------------------------------------------------------------------
 #

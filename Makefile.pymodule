@@ -1,0 +1,104 @@
+# -----------------------------------------------------------------------------
+# PYTHON PROJECT MAKEFILE
+# -----------------------------------------------------------------------------
+# Updated: 2016-12-01
+# Created: 2016-08-16
+# License: MIT License
+# -----------------------------------------------------------------------------
+
+VERSION        ?= `grep __version__ src/$(MODULE)/*.py | cut -d '=' -f2  | xargs echo`
+
+# === SOURCES =================================================================
+
+SOURCES_PY     ?= $(wildcard src/*.py) $(wildcard src/*/*.py) $(wildcard src/*/*/*.py) $(wildcard setup.py)
+SOURCES_BIN    ?= $(wildcard bin/*)
+SOURCES_TXTO   ?= $(wildcard doc/*.txto)
+SOURCES_MD     ?= $(wildcard *.md doc/*.md)
+SOURCES_ALL    ?= $(SOURCES_PY) $(SOURCES_TXTO) $(SOURCES_MD)
+
+# === BUILD ===================================================================
+
+BUILD_ALL      ?= MANIFEST
+
+# === DIST ====================================================================
+
+# === GIT =====================================================================
+
+GIT_RELEASE_PUSH = gh
+
+DIST_ALL        ?= $(SOURCES_PY) $(SOURCES_MD) $(SOURCES_BIN)
+
+# === HELPERS =================================================================
+
+OS             = `uname -s | tr A-Z a-z`
+TIMESTAMP     :=$(shell date +'%F')
+BUILD_ID      :=$(shell git rev-parse --verify HEAD)
+MAKEFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
+MAKEFILE_DIR  := $(notdir $(patsubst %/,%,$(dir $(MAKEFILE_PATH))))
+
+YELLOW         =`tput setaf 11`
+GREEN          =`tput setaf 10`
+BLUE           =`tput setaf 12`
+CYAN           =`tput setaf 14`
+RED            =`tput setaf 1`
+GRAY           =`tput setaf 7`
+RESET          =`tput sgr0`
+
+.PHONY: all doc clean check test
+
+# -----------------------------------------------------------------------------
+# 
+#
+# MAIN RULES
+# 
+# -----------------------------------------------------------------------------
+
+build: $(BUILD_ALL) ## Builds all the project assets
+
+dist: $(DIST_ALL) $(BUILD_ALL) ## Updates the distribution of the project
+	@echo "$(CYAN)📦  dist: $(words $(DIST_ALL)) files $(RESET)"
+	@echo "$(BLUE)  $(DIST_ALL)$(RESET)"
+	python setup.py clean sdist
+
+help: ## Displays a description of the different Makefile rules
+	@echo "$(CYAN)★★★ $(PROJECT) Makefile ★★★$(RESET)"
+	@grep -E -o '((\w|-)+):[^#]+(##.*)$$'  $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":|##"}; {printf "make \033[01;32m%-15s\033[0m🕮 %s\n", $$1, $$3}'
+
+clean: ## Cleans the build files
+	@echo "$(GREEN)♻  clean: Cleaning $(words $(BUILD_ALL)) files $(RESET)"
+	@echo "$(BLUE)♻  $(BUILD_ALL) $(RESET)"
+	@test -n "$(BUILD_ALL)" && (echo $(BUILD_ALL) | xargs -n1 rm 2> /dev/null) ; true
+	@test -n "$(BUILD_PATH)" -a -e "$(BUILD_PATH)" && rm -r $(BUILD_PATH) ; true
+
+release: $(PRODUCT) ## Commits, tags, pushes to Git, registers and uploads on PyPI
+	@echo "$(CYAN)📦  releasing $(VERSION)$(RESET)"
+	git commit -a -m "Release $(VERSION)" ; true
+	git tag $(VERSION) ; true
+	git push $(GIT_RELEASE_PUSH) --all ; true
+	python setup.py clean sdist register upload
+
+check: ## Runs pychecker on the Python sources
+	@echo "$(CYAN)🔧  checking: $(SOURCE_PU)$(RESET)"
+	pychecker -100 $(SOURCES_PY)
+
+# -----------------------------------------------------------------------------
+#
+# BUILD FILES
+# 
+# -----------------------------------------------------------------------------
+
+MANIFEST: $(DIST_ALL) $(wildcard Makefile*)
+	echo $(DIST_ALL) | xargs -n1 | sort | uniq > $@
+
+# -----------------------------------------------------------------------------
+#
+# HELPERS
+# 
+# -----------------------------------------------------------------------------
+
+print-%:
+	@echo $*=$($*) | xargs -n1 echo
+
+FORCE:
+
+#EOF
