@@ -3,11 +3,11 @@
 # -----------------------------------------------------------------------------
 # Updated: 2016-12-01
 # Created: 2016-08-16
-# License: MIT License
+# License: Revised BSD license
 # -----------------------------------------------------------------------------
 
 MODULE         ?=$(PROJECT)
-VERSION        ?=`grep __version__ src/$(MODULE)/*.py | cut -d '=' -f2  | xargs echo`
+VERSION        ?=$(shell grep __version__ src/$(MODULE)/*.py | cut -d '=' -f2  | xargs echo)
 
 # === SOURCES =================================================================
 
@@ -82,9 +82,6 @@ check: ## Runs pychecker on the Python sources
 	@echo "$(CYAN)🔧  checking: $(MODULE)$(RESET)"
 	export PYTHONPATH=src && pychecker $(MODULE)
 
-setup.py: $(SOURCES_PY)
-	sed -i 's/VERSION \+= *"[^"]\+"/VERSION   = "$(VERSION)"/' setup.py
-
 # -----------------------------------------------------------------------------
 #
 # BUILD FILES
@@ -92,7 +89,12 @@ setup.py: $(SOURCES_PY)
 # -----------------------------------------------------------------------------
 
 MANIFEST: $(DIST_ALL) $(wildcard Makefile*)
-	echo $(DIST_ALL) | xargs -n1 | sort | uniq > $@
+	@echo "$(GREEN)📝  $@ [MANIFEST]$(RESET)"
+	@echo $(DIST_ALL) | xargs -n1 | sort | uniq > $@
+
+setup.py: $(filter-out setup.py,$(SOURCES_PY))
+	@echo "$(GREEN)📝  $@ [VERSION $(VERSION)]$(RESET)"
+	@sed -i 's/VERSION \+= *"[^"]\+"/VERSION      = "$(VERSION)"/' setup.py
 
 # -----------------------------------------------------------------------------
 #
