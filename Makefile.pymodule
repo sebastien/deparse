@@ -6,19 +6,20 @@
 # License: MIT License
 # -----------------------------------------------------------------------------
 
-VERSION        ?= `grep __version__ src/$(MODULE)/*.py | cut -d '=' -f2  | xargs echo`
+MODULE         ?=$(PROJECT)
+VERSION        ?=`grep __version__ src/$(MODULE)/*.py | cut -d '=' -f2  | xargs echo`
 
 # === SOURCES =================================================================
 
-SOURCES_PY     ?= $(wildcard src/*.py) $(wildcard src/*/*.py) $(wildcard src/*/*/*.py) $(wildcard setup.py)
-SOURCES_BIN    ?= $(wildcard bin/*)
-SOURCES_TXTO   ?= $(wildcard doc/*.txto)
-SOURCES_MD     ?= $(wildcard *.md doc/*.md)
-SOURCES_ALL    ?= $(SOURCES_PY) $(SOURCES_TXTO) $(SOURCES_MD)
+SOURCES_PY     ?=$(wildcard src/*.py) $(wildcard src/*/*.py) $(wildcard src/*/*/*.py) $(wildcard setup.py)
+SOURCES_BIN    ?=$(wildcard bin/*)
+SOURCES_TXTO   ?=$(wildcard doc/*.txto)
+SOURCES_MD     ?=$(wildcard *.md doc/*.md)
+SOURCES_ALL    ?=$(SOURCES_PY) $(SOURCES_TXTO) $(SOURCES_MD)
 
 # === BUILD ===================================================================
 
-BUILD_ALL      ?= MANIFEST
+BUILD_ALL      ?= MANIFEST $(wildcard setup.py)
 
 # === DIST ====================================================================
 
@@ -78,8 +79,11 @@ release: $(PRODUCT) ## Commits, tags, pushes to Git, registers and uploads on Py
 	python setup.py clean sdist register upload
 
 check: ## Runs pychecker on the Python sources
-	@echo "$(CYAN)🔧  checking: $(SOURCE_PU)$(RESET)"
-	pychecker -100 $(SOURCES_PY)
+	@echo "$(CYAN)🔧  checking: $(MODULE)$(RESET)"
+	export PYTHONPATH=src && pychecker $(MODULE)
+
+setup.py: $(SOURCES_PY)
+	sed -i 's/VERSION \+= *"[^"]\+"/VERSION   = "$(VERSION)"/' setup.py
 
 # -----------------------------------------------------------------------------
 #

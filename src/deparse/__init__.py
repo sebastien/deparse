@@ -19,8 +19,8 @@ try:
 except ImportError as e:
 	import logging
 
-VERSION = "0.0.0"
-LICENSE = "http://ffctn.com/doc/licenses/bsd"
+__version__ = "0.2.0"
+LICENSE     = "http://ffctn.com/doc/licenses/bsd"
 
 __doc__ = """
 Extracts/lists dependencies from Paml and Sugar files. Dependencie are
