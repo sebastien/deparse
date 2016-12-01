@@ -9,7 +9,7 @@
 # Last modification : 2016-11-30
 # -----------------------------------------------------------------------------
 
-import os, re, glob, argparse, fnmatch
+import sys, os, re, glob, argparse, fnmatch
 
 VERSION = "0.0.0"
 LICENSE = "http://ffctn.com/doc/licenses/bsd"
@@ -162,7 +162,22 @@ class Dependencies(object):
 		self.nodes    = {}
 
 	def fromPath( self, path, recursive=False ):
-		"""Lists the dependencies at the given path in import priority."""
+		"""Lists the dependencies at the given path in import priority. This
+		method supports paths containing multiple files, for instance:
+
+
+		```
+		lib/js/jquery.js+lodash.js
+		```
+
+		will be translated to
+
+		```
+		["lib/js/jquery.js", "lib/js/lodash.js"]
+		```
+
+		if the file `lib/js/jquery.js+lodash.js` does not exists.
+		"""
 		self._fromPath(path, recursive=recursive)
 		return {
 			"provides":self.provides,
@@ -172,20 +187,27 @@ class Dependencies(object):
 
 	def _fromPath( self, path, recursive=False ):
 		"""Helper function of the `fromPath` method."""
-		if path in self.paths: return self
-		self.paths.append(path)
-		ext      = path.rsplit(".",1)[1].lower()
-		parser   = self.FILE_TYPES[ext]().parsePath(path)
-		self.provides.append((path, parser.provides))
-		self.requires = self._merge(self.requires, parser.requires)
-		# We register the nodes
-		for name in parser.provides:
-			if name not in self.nodes: self.nodes[name] = []
-			self.nodes[name] = self._merge(self.nodes[name], parser.requires)
-		if recursive:
-			for dependency in parser.requires:
-				for dependency_path in self.resolve(dependency, path):
-					self._fromPath(dependency_path, recursive=recursive)
+		if not os.path.exists(path) and "+" in path:
+			paths  = path.split("+")
+			prefix = os.path.dirname(paths[0])
+			paths  = [paths[0]] + [os.path.join(prefix, _) for _ in paths[1:]]
+			return [self._fromPath(_, recursive=recursive) for _ in paths]
+		elif path in self.paths:
+			return self
+		else:
+			self.paths.append(path)
+			ext      = path.rsplit(".",1)[1].lower()
+			parser   = self.FILE_TYPES[ext]().parsePath(path)
+			self.provides.append((path, parser.provides))
+			self.requires = self._merge(self.requires, parser.requires)
+			# We register the nodes
+			for name in parser.provides:
+				if name not in self.nodes: self.nodes[name] = []
+				self.nodes[name] = self._merge(self.nodes[name], parser.requires)
+			if recursive:
+				for dependency in parser.requires:
+					for dependency_path in self.resolve(dependency, path):
+						self._fromPath(dependency_path, recursive=recursive)
 
 	def _merge( self, a, b ):
 		for e in b:
