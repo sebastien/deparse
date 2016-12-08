@@ -12,6 +12,19 @@
 from __future__ import print_function
 
 import sys, os, re, glob, argparse, fnmatch
+from   functools import reduce
+
+# TODO: We should introduce a high-level tracker/resolver (maybe as
+# catalogue) that does caching. It should basically maintain
+# a mapping of the graph:
+#
+# - (type,name) → path
+# - path + provides  → [ (type,name) ]
+# - path + requires  → [ (type,name) ]
+#
+# - find(name|(type,name))
+# - depends|requires(path|name|item)
+# - provides(path|item)
 
 try:
 	import reporter
@@ -99,6 +112,7 @@ class LineParser(object):
 						res.append(("*:file", p))
 		if not res:
 			logging.error("Unresolved item in {0}: {1} at {2}".format(self.__class__.__name__, item, path))
+		res = reduce(lambda x,y:x + [y] if y not in x else x, res, [])
 		return res
 
 	def _glob( self, dirs, *expressions ):
@@ -108,6 +122,13 @@ class LineParser(object):
 				p = os.path.join(d, e)
 				matches += glob.glob(p)
 		return sorted(matches)
+
+	def export( self ):
+		return dict(
+			path=self.path,
+			provides=self.provides,
+			requires=self.requires,
+		)
 
 # -----------------------------------------------------------------------------
 #
@@ -239,6 +260,7 @@ class Paml(LineParser):
 			type = "*:file"
 		self.requires.append((type, line))
 
+
 # -----------------------------------------------------------------------------
 #
 # DEPENDENCIES
@@ -248,18 +270,8 @@ class Paml(LineParser):
 class Tracker(object):
 	"""Extracts and aggregates dependencies."""
 
-	PARSERS = {
-		"paml" : Paml,
-		"sjs"  : Sugar,
-		"js"   : JavaScript,
-		"c"    : C,
-		"cxx"  : C,
-		"c++"  : C,
-		"cpp"  : C,
-		"h"    : C,
-	}
-
 	def __init__( self ):
+		self.PARSERS = PARSERS
 		self.provides = []
 		self.requires = []
 		self.paths    = []
@@ -366,10 +378,9 @@ class Tracker(object):
 class Resolver(object):
 	"""Resolves (symbol) names into files."""
 
-	PARSERS = (lambda _:_.update(Tracker.PARSERS) or _)({})
-
 	def __init__( self ):
 		super(Resolver, self).__init__()
+		self.PARSERS = PARSERS
 		self.paths = []
 
 	def addPath( self, path ):
@@ -380,12 +391,32 @@ class Resolver(object):
 		parsers = [(_, self.PARSERS[_]()) for _ in self.PARSERS]
 		matches = {}
 		path    = os.getcwd()
-		if isinstance(elements, str): elements=[elements]
+		if isinstance(elements, str) or isinstance(elements, unicode): elements=[elements]
 		for element in elements:
 			for t,p in parsers:
 				matches.setdefault(element,[])
-				matches[element].extend(p.resolve((None,element), path, self.paths))
+				# We ensure an element is not present twice
+				for _ in p.resolve((None,element), path, self.paths):
+					if _ not in matches[element]:
+						matches[element].append(_)
 		return matches
+
+# -----------------------------------------------------------------------------
+#
+# PARSERS
+#
+# -----------------------------------------------------------------------------
+
+PARSERS = {
+	"paml" : Paml,
+	"sjs"  : Sugar,
+	"js"   : JavaScript,
+	"c"    : C,
+	"cxx"  : C,
+	"c++"  : C,
+	"cpp"  : C,
+	"h"    : C,
+}
 
 # -----------------------------------------------------------------------------
 #
@@ -393,11 +424,28 @@ class Resolver(object):
 #
 # -----------------------------------------------------------------------------
 
+def parse( path ):
+	"""Tries to parse the file at the given path and return a list of
+	the symbols that it provides as a couple `(type, [provides])`."""
+	ext = path.rsplit(".", 1)[-1]
+	parser = PARSERS.get(ext)
+	if parser:
+		parser = parser()
+		return parser, parser.parsePath(path).export()
+	else:
+		return None, None
+
+def provides( path ):
+	"""Tries to parse the file at the given path and return a list of
+	the symbols that it provides, if any."""
+	parser, res = parse(path)
+	return res["provides"] if res else ()
+
 def find( args, recursive=True, resolve=False ):
 	"""Lists all the dependencies listed in the given files."""
 	rsl = Resolver()
 	res = None
-	if isinstance(args, str): args = [args]
+	if isinstance(args, str) or isinstance(args, unicode): args = [args]
 	for _ in args:
 		r = (rsl.find(_))
 		if not res:
@@ -409,15 +457,15 @@ def find( args, recursive=True, resolve=False ):
 def list( args, recursive=True, resolve=False ):
 	"""Lists all the dependencies listed in the given files."""
 	deps = Tracker()
-	res  = None
-	if isinstance(args, str): args = [args]
+	res  = {}
+	if isinstance(args, str) or isinstance(args, unicode): args = [args]
 	for _ in args:
 		r = (deps.fromPath(_, recursive=recursive))
 		if not res:
 			res = r
 		else:
 			res.update(r)
-	return res["requires"]
+	return res.get("requires") or ()
 
 def run( args, recursive=False, mode=Tracker ):
 	"""Extracts the dependencies of the given files."""
@@ -538,7 +586,6 @@ def command( args, name=None ):
 # MAIN
 #
 # -----------------------------------------------------------------------------
-
 if __name__ == "__main__":
 	import sys
 	command(sys.argv[1:])
