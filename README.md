@@ -65,6 +65,49 @@ optional arguments:
 Examples
 ========
 
+
+- List all the dependencies in a file
+
+	```shell
+	deparse index.js
+	```
+
+	```python
+	deparse.list("index.js")
+	```
+
+	do it recursively
+
+	```shell
+	deparse -r index.js
+	```
+
+	```python
+	deparse.list("index.js", recursive=True)
+	```
+
+- Find the files corresponding to the given modules
+
+	```shell
+	deparse -f index
+	```
+
+	```shell
+	deparse.find("index")
+	```
+
+- Lists all the dependencies of the given module
+
+	```shell
+	deparse -fl index
+	```
+
+Shell
+-----
+
+- List all dependencies in a file
+
+
 - **Listing per-file dependencies in a makefile**
 - **Create arguments for `closure-compiler`**
 

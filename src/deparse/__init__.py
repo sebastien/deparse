@@ -19,12 +19,12 @@ try:
 except ImportError as e:
 	import logging
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 LICENSE     = "http://ffctn.com/doc/licenses/bsd"
 
 __doc__ = """
 *deparse* extracts/lists and resolves dependencies from a variety of files.
-Dependencies are listed as couples `(<type>, <name>)` where type is a string like
+Tracker are listed as couples `(<type>, <name>)` where type is a string like
 `<language>:<type>`, for instance `js:file`, `js:module`, etc.
 
 The `deparse` module features both an API and a command-line interface.
@@ -72,33 +72,31 @@ class LineParser(object):
 	def onParse( self, path ):
 		pass
 
-	def resolve( self, item, path ):
+	def resolve( self, item, path, dirs=() ):
 		"""Finds the actual path for the given item `(type, name)`, returning
 		a list of the matching paths (the item might be implemented by more than
 		one file)."""
 		t, name = item
 		res     = []
-		dirs    = [os.getcwd(), os.path.dirname(os.path.abspath(path))]
+		dirs    = [_ for _ in dirs] + [os.getcwd(), os.path.dirname(os.path.abspath(path)) if not os.path.isdir(path) else os.path.abspath(path)]
 		# TODO: Support resolvers
-		if t == "js:module":
+		if not t or t == "js:module" or not t:
 			name = name.replace(".", "/")
-			js_modules  = sorted([_ for _ in self._glob(dirs, "lib/js/{0}-*.js".format(name,)) if ".gmodules" not in _])
-			sjs_modules = sorted([_ for _ in self._glob(dirs, "lib/sjs/{0}.sjs".format(name ),  "lib/sjs/{0}*-*.sjs".format(name))])
-			res = sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
-		elif t == "js:gmodule":
+			js_modules  = sorted([("js:module", _) for _ in self._glob(dirs, "lib/js/{0}-*.js".format(name,)) if ".gmodules" not in _])
+			sjs_modules = sorted([("js:module", _) for _ in self._glob(dirs, "lib/sjs/{0}.sjs".format(name ),  "lib/sjs/{0}*-*.sjs".format(name))])
+			res += sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
+		if not t or t == "js:gmodule":
 			name = name.replace(".", "/")
-			js_modules  = sorted([_ for _ in self._glob(dirs, "lib/js/{0}-*.js".format(name) ) if ".gmodules" in _])
-			sjs_modules = sorted([_ for _ in self._glob(dirs, "lib/sjs/{0}*.sjs".format(name), "lib/sjs/{0}*-*.sjs".format(name))])
-			res = sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
-		elif t.endswith(":file"):
-			altname = name + "." + t.split(":",1)[0]
+			js_modules  = sorted([("js:gmodule", _) for _ in self._glob(dirs, "lib/js/{0}-*.js".format(name) ) if ".gmodules" in _])
+			sjs_modules = sorted([("js:gmodule", _) for _ in self._glob(dirs, "lib/sjs/{0}*.sjs".format(name), "lib/sjs/{0}*-*.sjs".format(name))])
+			res += sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
+		if not t or t.endswith(":file"):
+			altname = name + ("." + t.split(":",1)[0] if t else "")
 			for n in (name, altname):
 				for d in dirs:
 					p = os.path.join(d, n)
 					if os.path.exists(p):
-						res.append(p)
-		else:
-			raise Exception("Type not supported: {0}".format(t))
+						res.append(("*:file", p))
 		if not res:
 			logging.error("Unresolved item in {0}: {1} at {2}".format(self.__class__.__name__, item, path))
 		return res
@@ -243,11 +241,11 @@ class Paml(LineParser):
 
 # -----------------------------------------------------------------------------
 #
-# DEPENENCIES
+# DEPENDENCIES
 #
 # -----------------------------------------------------------------------------
 
-class Dependencies(object):
+class Tracker(object):
 	"""Extracts and aggregates dependencies."""
 
 	PARSERS = {
@@ -336,7 +334,7 @@ class Dependencies(object):
 		"""Finds the actual path for the given item `(type, name)`, returning
 		a list of the matching paths (the item might be implemented by more than
 		one file)."""
-		res = parser.resolve(item, path) or ()
+		res = [_[1] for _ in parser.resolve(item, path)] or ()
 		t, name = item
 		if name not in self.resolved: self.resolved[item] = []
 		self.resolved[item] = self._merge(self.resolved[item], res)
@@ -361,14 +359,58 @@ class Dependencies(object):
 
 # -----------------------------------------------------------------------------
 #
+# RESOLVER
+#
+# -----------------------------------------------------------------------------
+
+class Resolver(object):
+	"""Resolves (symbol) names into files."""
+
+	PARSERS = (lambda _:_.update(Tracker.PARSERS) or _)({})
+
+	def __init__( self ):
+		super(Resolver, self).__init__()
+		self.paths = []
+
+	def addPath( self, path ):
+		self.paths.append(path)
+		return self
+
+	def find( self, elements ):
+		parsers = [(_, self.PARSERS[_]()) for _ in self.PARSERS]
+		matches = {}
+		path    = os.getcwd()
+		if isinstance(elements, str): elements=[elements]
+		for element in elements:
+			for t,p in parsers:
+				matches.setdefault(element,[])
+				matches[element].extend(p.resolve((None,element), path, self.paths))
+		return matches
+
+# -----------------------------------------------------------------------------
+#
 # COMMAND-LINE INTERFACE
 #
 # -----------------------------------------------------------------------------
 
+def find( args, recursive=True, resolve=False ):
+	"""Lists all the dependencies listed in the given files."""
+	rsl = Resolver()
+	res = None
+	if isinstance(args, str): args = [args]
+	for _ in args:
+		r = (rsl.find(_))
+		if not res:
+			res = r
+		else:
+			res.update(r)
+	return res
+
 def list( args, recursive=True, resolve=False ):
 	"""Lists all the dependencies listed in the given files."""
-	deps = Dependencies()
+	deps = Tracker()
 	res  = None
+	if isinstance(args, str): args = [args]
 	for _ in args:
 		r = (deps.fromPath(_, recursive=recursive))
 		if not res:
@@ -377,17 +419,22 @@ def list( args, recursive=True, resolve=False ):
 			res.update(r)
 	return res["requires"]
 
-def run( args, recursive=False ):
+def run( args, recursive=False, mode=Tracker ):
 	"""Extracts the dependencies of the given files."""
-	deps = Dependencies()
-	res  = None
-	for _ in args:
-		r = (deps.fromPath(_, recursive=recursive))
-		if not res:
-			res = r
-		else:
-			res.update(r)
-	return res
+	if isinstance(args, str): args = [args]
+	if mode == Tracker:
+		deps = Tracker()
+		res  = None
+		for _ in args:
+			r = (deps.fromPath(_, recursive=recursive))
+			if not res:
+				res = r
+			else:
+				res.update(r)
+		return res
+	elif mode == Resolver:
+		res = find(args)
+		return res
 
 def command( args, name=None ):
 	"""The command-line interface of this module."""
@@ -399,38 +446,92 @@ def command( args, name=None ):
 	)
 	# TODO: Rework command lines arguments, we want something that follows
 	# common usage patterns.
-	oparser.add_argument("files", metavar="FILE", type=str, nargs='+', help='The files to extract dependencies from')
-	oparser.add_argument("-o", "--output",    type=str,  dest="output", default="-", help="Specifies an output file")
-	oparser.add_argument("-t", "--type",      type=str,  dest="types",  nargs="+", default=("*",))
-	oparser.add_argument("-r", "--recursive", dest="recursive",  action="store_true", default=False)
-	oparser.add_argument("-p", "--path",      dest="show_path",  action="store_true", default=False)
-	oparser.add_argument("-a", "--absolute",  dest="abs_path",   action="store_true", default=False)
+	oparser.add_argument("files", metavar="FILE", type=str, nargs='+',
+			help='The files to extract dependencies from')
+	oparser.add_argument("-o", "--output",    type=str,  dest="output", default="-",
+			help="Specifies an output file")
+	oparser.add_argument("-t", "--type",      type=str,  dest="types",  nargs="+", default=("*",),
+			help="The types to be matched, wildcards accepted")
+	oparser.add_argument("-r", "--recursive", dest="recursive",  action="store_true", default=False,
+			help="Recurse through the dependencies")
+	oparser.add_argument("-p", "--path",      dest="show_path",  action="store_true", default=False,
+			help="Shows the relative path of the element")
+	oparser.add_argument("-P", "--abspath",   dest="abs_path",   action="store_true", default=False,
+			help="Shows the absolute path of the element")
+	oparser.add_argument("-l", "--list",      dest="list",    action="store_true", default=False,
+			help="Lists the dependencies of the given symbols (find mode)"
+	)
+	oparser.add_argument("-f", "--find",      dest="find",    action="store_true", default=False,
+			help="Finds the files corresponding to the given symbols (find mode)"
+	)
 	# We create the parse and register the options
-	args = oparser.parse_args(args=args)
-	res  = run(args.files, recursive=args.recursive)
-	out  = sys.stdout
-	resolved = []
-	cwd  = os.getcwd()
-	for item in res["requires"]:
-		t, n = item
-		for tp in args.types:
-			if fnmatch.fnmatch(t, tp):
-				if args.show_path:
-					r = set(res["resolved"].get(item) or ())
-					if not r:
-						logging.error("Item {0} unresolved".format(item))
-					for p in r:
-						if p not in resolved:
-							resolved.append(p)
-							out.write(p if args.abs_path else os.path.relpath(p, cwd))
-							out.write("\n")
-				else:
-					if n not in resolved:
-						resolved.append(n)
-						out.write(t)
-						out.write("\t")
-						out.write(n)
+	args     = oparser.parse_args(args=args)
+	out      = sys.stdout
+	cwd      = os.getcwd()
+	# === RESOLVER ============================================================
+	# This runs like a first pass, as the resolved elements might be fed
+	# to the dependency tracking, for instance:
+	#
+	# deparse -fl module
+	# deparse -fr module
+	#
+	if args.find:
+		# We're in resolution mode, so we're trying to locate the given elements
+		res   = run(args.files, recursive=args.recursive, mode=Resolver)
+		paths = []
+		for name in args.files:
+			resolved = sorted(set(res.get(name) or ()))
+			groups = {}
+			for t, path in resolved:
+				groups.setdefault(path,[])
+				groups[path].append(t)
+			if not resolved:
+				logging.error("Could not resolve: `{0}`".format(name))
+			for path in sorted(groups.keys()):
+				if args.show_path or args.abs_path:
+					if path not in paths:
+						if args.abs_path:
+							out.write(os.path.abspath(n))
+						else:
+							out.write(n + ":")
+							out.write(os.path.relpath(n,cwd))
 						out.write("\n")
+				elif not args.list or not args.recursive:
+					out.write(name)
+					out.write("\t")
+					out.write(path)
+					out.write("\t")
+					out.write(",".join(groups.get(path)))
+					out.write("\n")
+				paths.append(path)
+		if args.list or args.recursive:
+			args.files = paths
+	# === TRACKER =============================================================
+	if not args.find or args.recursive or args.list:
+		res = run(args.files, recursive=args.recursive, mode=Tracker)
+		# We're in dependency mode, so we list the dependencies referenced
+		# in the files given as arguments.
+		resolved = []
+		for item in res["requires"]:
+			t, n = item
+			for tp in args.types:
+				if fnmatch.fnmatch(t, tp):
+					if args.show_path or args.abs_path:
+						r = set(res["resolved"].get(item) or ())
+						if not r:
+							logging.error("Item {0} unresolved".format(item))
+						for p in r:
+							if p not in resolved:
+								resolved.append(p)
+								out.write(p if args.abs_path else os.path.relpath(p, cwd))
+								out.write("\n")
+					else:
+						if n not in resolved:
+							resolved.append(n)
+							out.write(t)
+							out.write("\t")
+							out.write(n)
+							out.write("\n")
 
 # -----------------------------------------------------------------------------
 #
@@ -443,4 +544,3 @@ if __name__ == "__main__":
 	command(sys.argv[1:])
 
 # EOF - vim: ts=4 sw=4 noet
-
