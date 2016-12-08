@@ -19,9 +19,13 @@ SOURCES_ALL    ?=$(SOURCES_PY) $(SOURCES_TXTO) $(SOURCES_MD)
 
 # === BUILD ===================================================================
 
-BUILD_ALL      ?= MANIFEST $(wildcard setup.py)
+BUILD_ALL      ?= MANIFEST api.html $(wildcard setup.py)
 
 # === DIST ====================================================================
+
+# === PYTHON ==================================================================
+
+PY_MODULES     ?=$(shell find src -name "*.py" | cut -d/ -f2- | sed 's|/__init__.py||g;s|.py||g')
 
 # === GIT =====================================================================
 
@@ -95,6 +99,9 @@ MANIFEST: $(DIST_ALL) $(wildcard Makefile*)
 setup.py: $(filter-out setup.py,$(SOURCES_PY))
 	@echo "$(GREEN)📝  $@ [VERSION $(VERSION)]$(RESET)"
 	@sed -i 's/VERSION \+= *"[^"]\+"/VERSION      = "$(VERSION)"/' setup.py
+
+api.html: $(BUILD_ALL) $(SOURCES_PY)
+	smalldoc -mtexto -t"$(PROJECT) API $(VERSION)" $(PY_MODULES) api.html
 
 # -----------------------------------------------------------------------------
 #

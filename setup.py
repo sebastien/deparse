@@ -13,7 +13,7 @@
 from distutils.core import setup
 
 NAME        = "deparse"
-VERSION     = "0.2.0"
+VERSION      = "0.2.1"
 WEBSITE     = "http://github.com/sebastien/deparse/" + NAME.lower()
 SUMMARY     = "Multi-language dependency parsing tool & API"
 DESCRIPTION = """\

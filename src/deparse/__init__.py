@@ -6,7 +6,7 @@
 # License           : BSD License
 # -----------------------------------------------------------------------------
 # Creation date     : 2016-11-25
-# Last modification : 2016-12-01
+# Last modification : 2016-12-08
 # -----------------------------------------------------------------------------
 
 from __future__ import print_function
@@ -19,15 +19,15 @@ try:
 except ImportError as e:
 	import logging
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 LICENSE     = "http://ffctn.com/doc/licenses/bsd"
 
 __doc__ = """
-Extracts/lists dependencies from Paml and Sugar files. Dependencie are
-list of couples `(<type>, <name>)` where type is a string like
+*deparse* extracts/lists and resolves dependencies from a variety of files.
+Dependencies are listed as couples `(<type>, <name>)` where type is a string like
 `<language>:<type>`, for instance `js:file`, `js:module`, etc.
 
-The modules features both an API and a command-line interface.
+The `deparse` module features both an API and a command-line interface.
 """
 
 class LineParser(object):
@@ -35,7 +35,8 @@ class LineParser(object):
 	regular expressions defined the `LINES` map and executes the corresponding
 	method of the subclass with `(line, match)` as arguments."""
 
-	LINES = {}
+	LINES   = {}
+	OPTIONS = {}
 
 	def __init__( self ):
 		self.path     = None
@@ -70,6 +71,31 @@ class LineParser(object):
 
 	def onParse( self, path ):
 		pass
+
+	def resolve( self, item, path ):
+		"""Finds the actual path for the given item `(type, name)`, returning
+		a list of the matching paths (the item might be implemented by more than
+		one file)."""
+		t, name = item
+		res     = ()
+		# TODO: Support resolvers
+		if t == "js:module":
+			name = name.replace(".", "/")
+			js_modules  = sorted([_ for _ in glob.glob("lib/js/{0}-*.js".format(name))  if ".gmodules" not in _])
+			sjs_modules = sorted([_ for _ in glob.glob("lib/sjs/{0}.sjs".format(name)) + glob.glob("lib/sjs/{0}*-*.sjs".format(name))])
+			res = sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
+		elif t == "js:gmodule":
+			name = name.replace(".", "/")
+			js_modules  = sorted([_ for _ in glob.glob("lib/js/{0}-*.js".format(name))  if ".gmodules" in _])
+			sjs_modules = sorted([_ for _ in glob.glob("lib/sjs/{0}*.sjs".format(name)) + glob.glob("lib/sjs/{0}*-*.sjs".format(name))])
+			res = sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
+		elif t.endswith(":file"):
+			return [name]
+		else:
+			raise Exception("Type not supported: {0}".format(t))
+		if not res:
+			logging.error("Unresolved item in {0}: {1} at {2}".format(self.__class__.__name__, item, path))
+		return res
 
 # -----------------------------------------------------------------------------
 #
@@ -117,10 +143,10 @@ class JavaScript(LineParser):
 		self.requires.append(("js:module", module))
 
 	def onGoogleProvide( self, line, match ):
-		self.provides.append(("js:module", match.group(1)))
+		self.provides.append(("js:gmodule", match.group(1)))
 
 	def onGoogleRequire( self, line, match ):
-		self.requires.append(("js:module", match.group(1)))
+		self.requires.append(("js:gmodule", match.group(1)))
 
 	def onImport( self, line, match ):
 		module = match.groups()[-1]
@@ -141,6 +167,9 @@ class JavaScript(LineParser):
 class Sugar(LineParser):
 	"""Dependency parser for Sugar files."""
 
+	OPTIONS = {
+	}
+
 	LINES = {
 		"onModule"  : "^@module\s+([^\s]+)",
 		"onImport"  : "^@import",
@@ -160,6 +189,14 @@ class Sugar(LineParser):
 			_ = _.strip()
 			if _:
 				self.requires.append(("js:module",_))
+
+	def resolve( self, item, path ):
+		"""Finds the actual path for the given item `(type, name)`, returning
+		a list of the matching paths (the item might be implemented by more than
+		one file)."""
+		t, name = item
+		res     = []
+		return res
 
 # -----------------------------------------------------------------------------
 #
@@ -182,19 +219,18 @@ class Paml(LineParser):
 		if src[0] == src[-1] and src[0] in '"\'': src = src[1:-1]
 		self.requires.append(("js:file", src))
 
-	def onJavaScriptRequire( self, line, match, type="js"):
+	def onJavaScriptRequire( self, line, match, type="js:module"):
 		reqs = line.split("(",1)[1].rsplit(")",1)[0].split(",")
 		for name in reqs:
-			self.requires.append(("js:module", name))
+			self.requires.append((type, name))
 
 	def onJavaScriptGModule( self, line, match ):
 		return self.onJavaScriptRequire(line, match, type="js:gmodule")
 
 	def onInclude( self, line, match ):
 		line = line[len(match.group()):]
-		line = line.split("+",1)[0].strip
+		line = line.split("+",1)[0].strip()
 		self.requires.append(("paml:file", line))
-
 
 # -----------------------------------------------------------------------------
 #
@@ -269,9 +305,9 @@ class Dependencies(object):
 			for name in parser.provides:
 				if name not in self.nodes: self.nodes[name] = []
 				self.nodes[name] = self._merge(self.nodes[name], parser.requires)
-			if recursive:
-				for dependency in parser.requires:
-					for dependency_path in self.resolve(dependency, path):
+			for dependency in parser.requires:
+				for dependency_path in self.resolve(parser, dependency, path):
+					if recursive:
 						self._fromPath(dependency_path, recursive=recursive)
 
 	def _merge( self, a, b ):
@@ -280,23 +316,12 @@ class Dependencies(object):
 				a.append(e)
 		return a
 
-	def resolve( self, item, path ):
+	def resolve( self, parser, item, path ):
 		"""Finds the actual path for the given item `(type, name)`, returning
 		a list of the matching paths (the item might be implemented by more than
 		one file)."""
+		res = parser.resolve(item, path) or ()
 		t, name = item
-		res     = ()
-		# TODO: Support resolvers
-		if t == "js:module":
-			js_modules  = sorted([_ for _ in glob.glob("lib/js/{0}-*.js".format(name))  if ".gmodules" not in _])
-			sjs_modules = sorted([_ for _ in glob.glob("lib/sjs/{0}.sjs".format(name)) + glob.glob("lib/sjs/{0}*-*.sjs".format(name))])
-			res = sjs_modules if sjs_modules else (js_modules[-1],)
-		elif t == "js:gmodule":
-			js_modules  = sorted([_ for _ in glob.glob("lib/js/{0}-*.js".format(name))  if ".gmodules" in _])
-			sjs_modules = sorted([_ for _ in glob.glob("lib/sjs/{0}*.sjs".format(name)) + glob.glob("lib/sjs/{0}*-*.sjs".format(name))])
-			res = sjs_modules if sjs_modules else (js_modules[-1],)
-		else:
-			raise Exception("Type not supported: {0}".format(t))
 		if name not in self.resolved: self.resolved[item] = []
 		self.resolved[item] = self._merge(self.resolved[item], res)
 		return res
