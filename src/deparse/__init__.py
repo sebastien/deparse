@@ -15,7 +15,7 @@ import sys, os, re, glob, argparse, fnmatch
 
 try:
 	import reporter
-	logging = reporter.bind("deparse")
+	logging = reporter.bind("deparse", template=reporter.TEMPLATE_COMMAND)
 except ImportError as e:
 	import logging
 
@@ -78,24 +78,38 @@ class LineParser(object):
 		one file)."""
 		t, name = item
 		res     = ()
+		dirs    = [os.getcwd(), os.path.dirname(os.path.abspath(path))]
 		# TODO: Support resolvers
 		if t == "js:module":
 			name = name.replace(".", "/")
-			js_modules  = sorted([_ for _ in glob.glob("lib/js/{0}-*.js".format(name))  if ".gmodules" not in _])
-			sjs_modules = sorted([_ for _ in glob.glob("lib/sjs/{0}.sjs".format(name)) + glob.glob("lib/sjs/{0}*-*.sjs".format(name))])
+			js_modules  = sorted([_ for _ in self._glob(dirs, "lib/js/{0}-*.js".format(name,)) if ".gmodules" not in _])
+			sjs_modules = sorted([_ for _ in self._glob(dirs, "lib/sjs/{0}.sjs".format(name ),  "lib/sjs/{0}*-*.sjs".format(name))])
 			res = sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
 		elif t == "js:gmodule":
 			name = name.replace(".", "/")
-			js_modules  = sorted([_ for _ in glob.glob("lib/js/{0}-*.js".format(name))  if ".gmodules" in _])
-			sjs_modules = sorted([_ for _ in glob.glob("lib/sjs/{0}*.sjs".format(name)) + glob.glob("lib/sjs/{0}*-*.sjs".format(name))])
+			js_modules  = sorted([_ for _ in self._glob(dirs, "lib/js/{0}-*.js".format(name) ) if ".gmodules" in _])
+			sjs_modules = sorted([_ for _ in self._glob(dirs, "lib/sjs/{0}*.sjs".format(name), "lib/sjs/{0}*-*.sjs".format(name))])
 			res = sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
 		elif t.endswith(":file"):
-			return [name]
+			altname = name + "." + t.split(":",1)[0]
+			for n in (name, altname):
+				for d in dirs:
+					p = os.path.join(d, p)
+					if os.path.exists(p):
+						re.append(p)
 		else:
 			raise Exception("Type not supported: {0}".format(t))
 		if not res:
 			logging.error("Unresolved item in {0}: {1} at {2}".format(self.__class__.__name__, item, path))
 		return res
+
+	def _glob( self, dirs, *expressions ):
+		matches = []
+		for d in dirs:
+			for e in expressions:
+				p = os.path.join(d, e)
+				matches += glob.glob(p)
+		return sorted(matches)
 
 # -----------------------------------------------------------------------------
 #
@@ -190,14 +204,6 @@ class Sugar(LineParser):
 			if _:
 				self.requires.append(("js:module",_))
 
-	def resolve( self, item, path ):
-		"""Finds the actual path for the given item `(type, name)`, returning
-		a list of the matching paths (the item might be implemented by more than
-		one file)."""
-		t, name = item
-		res     = []
-		return res
-
 # -----------------------------------------------------------------------------
 #
 # PAML PARSER
@@ -229,8 +235,11 @@ class Paml(LineParser):
 
 	def onInclude( self, line, match ):
 		line = line[len(match.group()):]
-		line = line.split("+",1)[0].strip()
-		self.requires.append(("paml:file", line))
+		line = line.split("+",1)[0].split("{",1)[0].strip()
+		type = "paml:file"
+		if line.endswith(".svg"):
+			type = "*:file"
+		self.requires.append((type, line))
 
 # -----------------------------------------------------------------------------
 #
@@ -297,8 +306,12 @@ class Dependencies(object):
 			pass
 		else:
 			self.paths.append(path)
-			ext      = path.rsplit(".",1)[-1].lower()
-			parser   = self.PARSERS[ext]().parsePath(path)
+			ext         = path.rsplit(".",1)[-1].lower()
+			parser_type = self.PARSERS.get(ext)
+			if not parser_type:
+				logging.error("Parser not defined for type `{0}` in: {1}".format(ext, path))
+				return
+			parser      = parser_type().parsePath(path)
 			self.provides.append((path, parser.provides))
 			self.requires = self._merge(self.requires, parser.requires)
 			# We register the nodes
@@ -388,24 +401,31 @@ def command( args, name=None ):
 	oparser.add_argument("-t", "--type",      type=str,  dest="types",  nargs="+", default=("*",))
 	oparser.add_argument("-r", "--recursive", dest="recursive",  action="store_true", default=False)
 	oparser.add_argument("-p", "--path",      dest="show_path",  action="store_true", default=False)
+	oparser.add_argument("-a", "--absolute",  dest="abs_path",   action="store_true", default=False)
 	# We create the parse and register the options
 	args = oparser.parse_args(args=args)
 	res  = run(args.files, recursive=args.recursive)
 	out  = sys.stdout
 	resolved = []
+	cwd  = os.getcwd()
 	for item in res["requires"]:
 		t, n = item
 		for tp in args.types:
 			if fnmatch.fnmatch(t, tp):
 				if args.show_path:
-					for p in set(res["resolved"].get(item) or ()):
+					r = set(res["resolved"].get(item) or ())
+					if not r:
+						logging.error("Item {0} unresolved".format(item))
+					for p in r:
 						if p not in resolved:
 							resolved.append(p)
-							out.write(p)
+							out.write(p if args.abs_path else os.path.relpath(p, cwd))
 							out.write("\n")
 				else:
 					if n not in resolved:
 						resolved.append(n)
+						out.write(t)
+						out.write("\t")
 						out.write(n)
 						out.write("\n")
 

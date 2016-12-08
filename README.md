@@ -68,3 +68,10 @@ Examples
 - **Listing per-file dependencies in a makefile**
 - **Create arguments for `closure-compiler`**
 
+
+Planned features
+================
+
+- [ ] Dot/Neato output
+- [ ] CSS, PCSS support
+- [ ] Customisable resolution schemes
