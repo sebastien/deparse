@@ -77,7 +77,7 @@ class LineParser(object):
 		a list of the matching paths (the item might be implemented by more than
 		one file)."""
 		t, name = item
-		res     = ()
+		res     = []
 		dirs    = [os.getcwd(), os.path.dirname(os.path.abspath(path))]
 		# TODO: Support resolvers
 		if t == "js:module":
@@ -94,9 +94,9 @@ class LineParser(object):
 			altname = name + "." + t.split(":",1)[0]
 			for n in (name, altname):
 				for d in dirs:
-					p = os.path.join(d, p)
+					p = os.path.join(d, n)
 					if os.path.exists(p):
-						re.append(p)
+						res.append(p)
 		else:
 			raise Exception("Type not supported: {0}".format(t))
 		if not res:
@@ -319,8 +319,11 @@ class Dependencies(object):
 				if name not in self.nodes: self.nodes[name] = []
 				self.nodes[name] = self._merge(self.nodes[name], parser.requires)
 			for dependency in parser.requires:
-				for dependency_path in self.resolve(parser, dependency, path):
-					if recursive:
+				resolved = self.resolve(parser, dependency, path)
+				if recursive:
+					if not resolved:
+						logging.error("Cannot recurse on {0} in {1}: dependency {0} cannot be resolved".format(dependency, path))
+					for dependency_path in resolved:
 						self._fromPath(dependency_path, recursive=recursive)
 
 	def _merge( self, a, b ):
