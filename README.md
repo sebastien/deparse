@@ -22,15 +22,17 @@ Language support:
 
 - C (non-recursive)
 - JS (UMD, AMD, CommonJS, Google) (non-recursive)
+- CSS (imports, url values)
 - [Paml](https://github.com/sebastien/paml)
 - [Sugar](https://github.com/sebastien/sugar)
+- [PCSS](https://github.com/sebastien/pythoniccss)
 
 Features:
 
 - Optional **recursive dependency tracking**
 - Dependencies are **sorted based on load order**
 - Pluggable name-to-path resolution scheme
-- Extensible to other languages
+- Supporting more languages is easy
 
 Installing
 ==========
@@ -100,6 +102,13 @@ Examples
 
 	```shell
 	deparse -fl index
+	```
+
+- Create a makefile with depedencies
+
+	```make
+	MAIN=src/main.c
+	MAIN_DEPENDENCIES=$(shell deparse -rp $(MAIN))
 	```
 
 Shell

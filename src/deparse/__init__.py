@@ -6,7 +6,7 @@
 # License           : BSD License
 # -----------------------------------------------------------------------------
 # Creation date     : 2016-11-25
-# Last modification : 2016-12-08
+# Last modification : 2016-12-15
 # -----------------------------------------------------------------------------
 
 from __future__ import print_function
@@ -32,7 +32,7 @@ try:
 except ImportError as e:
 	import logging
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 LICENSE     = "http://ffctn.com/doc/licenses/bsd"
 
 __doc__ = """
@@ -46,10 +46,21 @@ The `deparse` module features both an API and a command-line interface.
 class LineParser(object):
 	"""An abstract line-based parser. It looks for lines matching the
 	regular expressions defined the `LINES` map and executes the corresponding
-	method of the subclass with `(line, match)` as arguments."""
+	method of the subclass with `(line, match)` as arguments.
+
+	The `LineParser.PATH` map defines paths where specific item types
+	are expected to be found. You can configure these at runtime so that
+	the items can be properly resolved by the `resolve` method.
+	"""
 
 	LINES   = {}
 	OPTIONS = {}
+	PATHS   = {
+		"js:module"   : ["src/js",  "lib/js"],
+		"sjs:module"  : ["src/sjs", "lib/sjs"],
+		"css:module"  : ["src/css", "lib/css"],
+		"pcss:module" : ["src/pcss", "lib/pcss"],
+	}
 
 	def __init__( self ):
 		self.path     = None
@@ -71,8 +82,11 @@ class LineParser(object):
 			self.parseLine(line)
 		return self
 
-	def relpath( self, path ):
-		return os.path.relpath(path, os.path.dirname(self.path)) if self.path else path
+	def normpath( self, path ):
+		"""Returns the normalized path, where if the path is relative, it is considered
+		relative to the currenlty parsed path, otherwise it will be returned as absolute."""
+		if os.path.abspath(path) == path: return path
+		return os.path.normpath(os.path.join(os.path.dirname(self.path), path)) if self.path else os.path.normpath(path)
 
 	def parseLine( self, line ):
 		for name, expr in self.LINES.items():
@@ -93,16 +107,26 @@ class LineParser(object):
 		res     = []
 		dirs    = [_ for _ in dirs] + [os.getcwd(), os.path.dirname(os.path.abspath(path)) if not os.path.isdir(path) else os.path.abspath(path)]
 		# TODO: Support resolvers
-		if not t or t == "js:module" or not t:
+		if not t or t == "js:module":
 			name = name.replace(".", "/")
-			js_modules  = sorted([("js:module", _) for _ in self._glob(dirs, "lib/js/{0}-*.js".format(name,)) if ".gmodules" not in _])
-			sjs_modules = sorted([("js:module", _) for _ in self._glob(dirs, "lib/sjs/{0}.sjs".format(name ),  "lib/sjs/{0}*-*.sjs".format(name))])
+			all_dirs = self._subdirs(dirs, *self.PATHS["js:module"])
+			js_modules  = sorted([("js:module", _) for _ in self._glob(all_dirs, "{0}-*.js".format(name,)) if ".gmodules" not in _])
+			all_dirs = self._subdirs(dirs, *self.PATHS["sjs:module"])
+			sjs_modules = sorted([("js:module", _) for _ in self._glob(all_dirs, "{0}.sjs".format(name ),  "{0}*-*.sjs".format(name))])
 			res += sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
 		if not t or t == "js:gmodule":
 			name = name.replace(".", "/")
-			js_modules  = sorted([("js:gmodule", _) for _ in self._glob(dirs, "lib/js/{0}-*.js".format(name) ) if ".gmodules" in _])
-			sjs_modules = sorted([("js:gmodule", _) for _ in self._glob(dirs, "lib/sjs/{0}*.sjs".format(name), "lib/sjs/{0}*-*.sjs".format(name))])
+			all_dirs = self._subdirs(dirs, *self.PATHS["js:module"])
+			js_modules  = sorted([("js:gmodule", _) for _ in self._glob(all_dirs, "{0}-*.js".format(name) ) if ".gmodules" in _])
+			all_dirs = self._subdirs(dirs, *self.PATHS["sjs:module"])
+			sjs_modules = sorted([("js:gmodule", _) for _ in self._glob(all_dirs, "{0}*.sjs".format(name), "lib/sjs/{0}*-*.sjs".format(name))])
 			res += sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
+		if not t or t == "css:module":
+			all_dirs = self._subdirs(dirs, *self.PATHS["css:module"])
+			css_modules  = sorted([("css:module",  _) for _ in self._glob(all_dirs, "{0}.css".format(name))])
+			all_dirs = self._subdirs(dirs, *self.PATHS["pcss:module"])
+			pcss_modules = sorted([("pcss:module", _) for _ in self._glob(all_dirs, "{0}*.pcss".format(name))])
+			res += pcss_modules if pcss_modules else (css_modules[-1],) if css_modules else ()
 		if not t or t.endswith(":file"):
 			altname = name + ("." + t.split(":",1)[0] if t else "")
 			for n in (name, altname):
@@ -110,9 +134,25 @@ class LineParser(object):
 					p = os.path.join(d, n)
 					if os.path.exists(p):
 						res.append(("*:file", p))
+		if t and t.endswith(":url"):
+			res.append(item)
+		res = self._resolve( res, item, path, dirs=() )
 		if not res:
 			logging.error("Unresolved item in {0}: {1} at {2}".format(self.__class__.__name__, item, path))
 		res = reduce(lambda x,y:x + [y] if y not in x else x, res, [])
+		return res
+
+	def _resolve( self, resolved, item, path, dirs ):
+		"""Can be overriden to update the result of `resolve`."""
+		return resolved
+
+	def _subdirs( self, dirs, *subdirs):
+		"""Returns `len(dirs) * len(subdirs)` directories where each `subdir` is joined
+		with all the `dirs`."""
+		res = []
+		for sd in subdirs:
+			res += [os.path.join(d,sd) for d in dirs]
+		res += dirs
 		return res
 
 	def _glob( self, dirs, *expressions ):
@@ -232,12 +272,50 @@ class Sugar(LineParser):
 class Paml(LineParser):
 	"""Dependency parser for PAML files."""
 
+	# NOTE: Borrowed from paml.engine
+	SYMBOL_NAME    = "\??([\w\d_-]+::)?[\w\d_-]+"
+	SYMBOL_ATTR    = "(%s)(=('[^']+'|\"[^\"]+\"|([^),]+)))?" % (SYMBOL_NAME)
+	SYMBOL_ATTRS   = "^%s(,%s)*$" % (SYMBOL_ATTR, SYMBOL_ATTR)
+	RE_ATTRIBUTE   = re.compile(SYMBOL_ATTR)
+
 	LINES = {
+		"onLinkTag"           : "^\t+<link\(",
 		"onJavaScriptTag"     : "^\t+<script\(",
 		"onJavaScriptRequire" : "^\t+@require\:js\(",
 		"onJavaScriptGModule" : "^\t+@require\:gmodule\(",
+		"onCSSRequire"        : "^\t+@require\:css\(",
 		"onInclude"           : "^\t+%include\s*"
 	}
+
+	def _parseAttributes( self, attributes ):
+		# NOTE: Borrowed and adapted from paml.engine.Parser._parsePAMLAttributes
+		result   = []
+		original = attributes
+		while attributes:
+			match  = self.RE_ATTRIBUTE.match(attributes)
+			assert match, "Given attributes are malformed: %s" % (attributes)
+			name  = match.group(1)
+			value = match.group(4)
+			# handles '::' syntax for namespaces
+			name = name.replace("::",":")
+			if value and value[0] == value[-1] and value[0] in ("'", '"'):
+				value = value[1:-1]
+			result.append([name, value])
+			attributes = attributes[match.end():]
+			if attributes:
+				assert attributes[0] == ",", "Attributes must be comma-separated: %s" % (attributes)
+				attributes = attributes[1:]
+				assert attributes, "Trailing comma with no remaining attributes: %s" % (original)
+		return dict((k,v) for k,v in result)
+
+	def onLinkTag( self, line, match ):
+		attrs = self._parseAttributes(line.split('(', 1)[-1].rsplit(")",1)[0])
+		url = attrs.get("href")
+		if attrs.get("rel") == "stylesheet" and url:
+			if "://" in url:
+				self.requires.append(("css:url",  url))
+			else:
+				self.requires.append(("css:file", url))
 
 	def onJavaScriptTag( self, line, match ):
 		src = line.split("src=",1)[1].split(",")[0].split(")")[0]
@@ -252,14 +330,46 @@ class Paml(LineParser):
 	def onJavaScriptGModule( self, line, match ):
 		return self.onJavaScriptRequire(line, match, type="js:gmodule")
 
+	def onCSSRequire( self, line, match ):
+		return self.onJavaScriptRequire(line, match, type="css:module")
+
 	def onInclude( self, line, match ):
 		line = line[len(match.group()):]
 		line = line.split("+",1)[0].split("{",1)[0].strip()
+		if not os.path.splitext(line)[-1]: line += ".paml"
 		type = "paml:file"
 		if line.endswith(".svg"):
 			type = "*:file"
 		self.requires.append((type, line))
 
+# -----------------------------------------------------------------------------
+#
+# PCSS PARSER
+#
+# -----------------------------------------------------------------------------
+
+class PCSS(LineParser):
+	"""Dependency parser for PCSS files."""
+
+	OPTIONS = {}
+
+	LINES = {
+		"onModule"  : "^@module\s+([^\s]+)",
+		"onInclude" : "^@include\s+([^\s]+)",
+		"onImport"  : "^@@import\s+(.+)",
+	}
+
+	def onModule( self, line, match ):
+		self.provides.append(("pcss:module",match.group(1)))
+
+	def onInclude( self, line, match ):
+		path = match.group(1).strip()
+		self.requires.append(("pcss:file", self.normpath(path)))
+
+	def onImport( self, line, match ):
+		path = match.group(1).strip()
+		if path[0] == path[-1] and path[0] in '"\'': path = path[1:-1]
+		self.requires.append(("css:file", self.normpath(path)))
 
 # -----------------------------------------------------------------------------
 #
@@ -329,6 +439,9 @@ class Tracker(object):
 				if name not in self.nodes: self.nodes[name] = []
 				self.nodes[name] = self._merge(self.nodes[name], parser.requires)
 			for dependency in parser.requires:
+				# We don't resolve URLs (yet)
+				if dependency[0].endswith(":url"):
+					continue
 				resolved = self.resolve(parser, dependency, path)
 				if recursive:
 					if not resolved:
@@ -359,11 +472,11 @@ class Tracker(object):
 		requires = sorted(requires, key=lambda _:len(self.nodes.get(_) or ()))
 		def load(module, loaded=loaded):
 			if module in loaded: return
+			loaded.append(module)
 			for required in self.nodes.get(module) or ():
 				# NOTE: This is a bug, the modules should not import themselves
 				if required == module: continue
 				load(required, loaded)
-			loaded.append(module)
 			return loaded
 		for _ in requires:
 			load(_)
@@ -411,6 +524,7 @@ PARSERS = {
 	"paml" : Paml,
 	"sjs"  : Sugar,
 	"js"   : JavaScript,
+	"pcss" : PCSS,
 	"c"    : C,
 	"cxx"  : C,
 	"c++"  : C,
