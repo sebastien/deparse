@@ -56,10 +56,12 @@ class LineParser(object):
 	LINES   = {}
 	OPTIONS = {}
 	PATHS   = {
-		"js:module"   : ["src/js",  "lib/js"],
-		"sjs:module"  : ["src/sjs", "lib/sjs"],
-		"css:module"  : ["src/css", "lib/css"],
-		"pcss:module" : ["src/pcss", "lib/pcss"],
+		"js:module"   : ["lib/js"  , ""],
+		"js:gmodule"  : ["lib/js"  , ""],
+		"sjs:module"  : ["lib/sjs" , ""],
+		"sjs:gmodule" : ["lib/sjs" , ""],
+		"css:module"  : ["lib/css" , ""],
+		"pcss:module" : ["lib/pcss", ""],
 	}
 
 	def __init__( self ):
@@ -67,17 +69,19 @@ class LineParser(object):
 		self.provides = []
 		self.requires = []
 
-	def parsePath( self, path ):
+	def parsePath( self, path, type=None ):
 		self.path = path
+		self.type = type
 		with open(path) as f:
-			self.onParse(path)
+			self.onParse(path, type)
 			for line in f.readlines():
 				self.parseLine(line)
 		self.path = None
+		self.type = None
 		return self
 
-	def parse( self, text, path=None ):
-		self.onParse(path or self.path)
+	def parse( self, text, path=None, type=None ):
+		self.onParse(path or self.path, type)
 		for line in text.split("\n"):
 			self.parseLine(line)
 		return self
@@ -96,7 +100,7 @@ class LineParser(object):
 				break
 		return self
 
-	def onParse( self, path ):
+	def onParse( self, path, type ):
 		pass
 
 	def resolve( self, item, path, dirs=() ):
@@ -110,16 +114,16 @@ class LineParser(object):
 		if not t or t == "js:module":
 			name = name.replace(".", "/")
 			all_dirs = self._subdirs(dirs, *self.PATHS["js:module"])
-			js_modules  = sorted([("js:module", _) for _ in self._glob(all_dirs, "{0}-*.js".format(name,)) if ".gmodules" not in _])
+			js_modules  = sorted([("js:module", _) for _ in self._glob(all_dirs, "{0}-*.js".format(name,)) if ".gmodule" not in _])
 			all_dirs = self._subdirs(dirs, *self.PATHS["sjs:module"])
-			sjs_modules = sorted([("js:module", _) for _ in self._glob(all_dirs, "{0}.sjs".format(name ),  "{0}*-*.sjs".format(name))])
+			sjs_modules = sorted([("sjs:module", _) for _ in self._glob(all_dirs, "{0}.sjs".format(name ),  "{0}*-*.sjs".format(name))])
 			res += sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
 		if not t or t == "js:gmodule":
 			name = name.replace(".", "/")
 			all_dirs = self._subdirs(dirs, *self.PATHS["js:module"])
-			js_modules  = sorted([("js:gmodule", _) for _ in self._glob(all_dirs, "{0}-*.js".format(name) ) if ".gmodules" in _])
+			js_modules  = sorted([("js:gmodule", _) for _ in self._glob(all_dirs, "{0}-*.js".format(name)) if ".gmodule" in _])
 			all_dirs = self._subdirs(dirs, *self.PATHS["sjs:module"])
-			sjs_modules = sorted([("js:gmodule", _) for _ in self._glob(all_dirs, "{0}*.sjs".format(name), "lib/sjs/{0}*-*.sjs".format(name))])
+			sjs_modules = sorted([("sjs:gmodule", _) for _ in self._glob(all_dirs, "{0}*.sjs".format(name), "{0}*-*.sjs".format(name))])
 			res += sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
 		if not t or t == "css:module":
 			all_dirs = self._subdirs(dirs, *self.PATHS["css:module"])
@@ -183,7 +187,7 @@ class C(LineParser):
 		"onInclude"  : "^\s*#include\s+[<\"]([^\>\"]+)[>\"]",
 	}
 
-	def onParse( self, path ):
+	def onParse( self, path, type ):
 		module = os.path.basename(path).rsplit("-",1)[0]
 		self.provides = [("c:header", module)]
 
@@ -207,13 +211,13 @@ class JavaScript(LineParser):
 		"onGoogleRequire" : "goog\.require\s*\(['\"](^['\"]+)['\"]\)",
 	}
 
-	def onParse( self, path ):
-		module = os.path.basename(path).rsplit("-",1)[0]
-		self.provides = [("js:module", module)]
+	def onParse( self, path, type ):
+		module  = os.path.basename(path).rsplit("-",1)[0]
+		self.provides = [(self.type or "js:module", module)]
 
 	def onRequire( self, line, match ):
 		decl, name, module, __, symbol, __, subsymbol = match.groups()
-		self.requires.append(("js:module", module))
+		self.requires.append((self.type or "js:module", module))
 
 	def onGoogleProvide( self, line, match ):
 		self.provides.append(("js:gmodule", match.group(1)))
@@ -229,7 +233,7 @@ class JavaScript(LineParser):
 			path = os.path.normpath(os.path.join(os.path.dirname(self.path or "."), module))
 			self.requires.append(("js:file", path))
 		else:
-			self.requires.append(("js:module", module))
+			self.requires.append((self.type or "js:module", module))
 
 # -----------------------------------------------------------------------------
 #
@@ -250,10 +254,12 @@ class Sugar(LineParser):
 
 	def __init__( self ):
 		super(Sugar, self).__init__()
-		self.requires = [("js:module", "extend")]
+
+	def onParse( self, path, type ):
+		self.requires = [(self.type or "js:module", "extend")]
 
 	def onModule( self, line, match ):
-		self.provides.append(("js:module",match.group(1)))
+		self.provides.append((self.type or "js:module",match.group(1)))
 
 	def onImport( self, line, match ):
 		line = line[len(match.group()):]
@@ -261,7 +267,7 @@ class Sugar(LineParser):
 		for _ in line.split(","):
 			_ = _.strip()
 			if _:
-				self.requires.append(("js:module",_))
+				self.requires.append((self.type or "js:module",_))
 
 # -----------------------------------------------------------------------------
 #
@@ -412,42 +418,51 @@ class Tracker(object):
 			"requires":self._sortRequires(self.requires)
 		}
 
-	def _fromPath( self, path, recursive=False ):
-		"""Helper function of the `fromPath` method."""
+	def _fromPath( self, path, recursive=False, type=None ):
+		"""Helper function of the `fromPath` method. Gets a parser
+		for the given file type, parses the file at the given path and
+		merges the `Parser.provides`/`Parser.requires`.
+		"""
 		if not os.path.exists(path) and "+" in path:
 			paths  = path.split("+")
 			prefix = os.path.dirname(paths[0])
 			paths  = [paths[0]] + [os.path.join(prefix, _) for _ in paths[1:]]
-			return [self._fromPath(_, recursive=recursive) for _ in paths]
+			return [self._fromPath(_, recursive=recursive, item=item) for _ in paths]
 		elif path in self.paths:
 			return self
 		elif os.path.isdir(path):
 			# We skip directories
 			pass
 		else:
+			# We add the path to prevent infinite recursion
 			self.paths.append(path)
+			# Now we find a parser for the extension
 			ext         = path.rsplit(".",1)[-1].lower()
 			parser_type = self.PARSERS.get(ext)
+			# We return and log an error if there's no matching parser
 			if not parser_type:
 				logging.error("Parser not defined for type `{0}` in: {1}".format(ext, path))
 				return
-			parser      = parser_type().parsePath(path)
+			# We do the parsing, merging back the provided and required elements.
+			parser      = parser_type().parsePath(path, type=type)
 			self.provides.append((path, parser.provides))
 			self.requires = self._merge(self.requires, parser.requires)
-			# We register the nodes
+			# We register/update the provided nodes
 			for name in parser.provides:
 				if name not in self.nodes: self.nodes[name] = []
 				self.nodes[name] = self._merge(self.nodes[name], parser.requires)
+			# We iterate on the dependency, trying to resolve them
 			for dependency in parser.requires:
 				# We don't resolve URLs (yet)
-				if dependency[0].endswith(":url"):
+				dependency_type = dependency[0]
+				if dependency_type.endswith(":url"):
 					continue
 				resolved = self.resolve(parser, dependency, path)
 				if recursive:
 					if not resolved:
 						logging.error("Cannot recurse on {0} in {1}: dependency {0} cannot be resolved".format(dependency, path))
 					for dependency_path in resolved:
-						self._fromPath(dependency_path, recursive=recursive)
+						self._fromPath(dependency_path, recursive=recursive, type=dependency_type)
 
 	def _merge( self, a, b ):
 		for e in b:
@@ -500,10 +515,10 @@ class Resolver(object):
 		self.paths.append(path)
 		return self
 
-	def find( self, elements ):
+	def find( self, elements, path=None ):
 		parsers = [(_, self.PARSERS[_]()) for _ in self.PARSERS]
 		matches = {}
-		path    = os.getcwd()
+		path    = path or os.getcwd()
 		if isinstance(elements, str) or isinstance(elements, unicode): elements=[elements]
 		for element in elements:
 			for t,p in parsers:
