@@ -10,7 +10,7 @@
 # -----------------------------------------------------------------------------
 
 import sys, os, argparse, fnmatch
-from .core import Tracker, Resolver, PARSERS
+from .core import logging, Tracker, Resolver, PARSERS
 
 def run( args, recursive=False, mode=Tracker ):
 	"""Extracts the dependencies of the given files."""
