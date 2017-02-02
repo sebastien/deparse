@@ -103,7 +103,7 @@ class LineParser(object):
 	def onParseEnd( self, path, type ):
 		pass
 
-	def resolve( self, item, path, dirs=() ):
+	def resolve( self, item, path, dirs=(), verbose=False ):
 		"""Finds the actual path for the given item `(type, name)`, returning
 		a list of the matching paths (the item might be implemented by more than
 		one file)."""
@@ -141,7 +141,7 @@ class LineParser(object):
 		if t and t.endswith(":url"):
 			res.append(item)
 		res = self._resolve( res, item, path, dirs=() )
-		if not res:
+		if verbose and not res:
 			logging.error("Unresolved item in {0}: {1} at {2}".format(self.__class__.__name__, item, path))
 		res = reduce(lambda x,y:x + [y] if y not in x else x, res, [])
 		return res
@@ -580,7 +580,7 @@ def provides( path ):
 	return res["provides"] if res else ()
 
 def find( args, recursive=True, resolve=False ):
-	"""Lists all the dependencies listed in the given files."""
+	"""Finds/lists the dependencies declared in the given files."""
 	rsl = Resolver()
 	res = None
 	if isinstance(args, str) or isinstance(args, unicode): args = [args]
