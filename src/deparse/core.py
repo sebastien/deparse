@@ -72,6 +72,7 @@ class LineParser(object):
 			self.onParse(path, type)
 			for line in f.readlines():
 				self.parseLine(line)
+			self.onParseEnd(path, type)
 		self.path = None
 		self.type = None
 		return self
@@ -97,6 +98,9 @@ class LineParser(object):
 		return self
 
 	def onParse( self, path, type ):
+		pass
+
+	def onParseEnd( self, path, type ):
 		pass
 
 	def resolve( self, item, path, dirs=() ):
@@ -245,6 +249,7 @@ class Sugar(LineParser):
 
 	LINES = {
 		"onModule"  : "^@module\s+([^\s]+)",
+		"onSugar2"  : "^@feature\s+sugar\s*=\s*2.*$",
 		"onImport"  : "^@import",
 	}
 
@@ -252,10 +257,18 @@ class Sugar(LineParser):
 		super(Sugar, self).__init__()
 
 	def onParse( self, path, type ):
-		self.requires = [(self.type or "js:module", "extend")]
+		self.requires = []
+		self.version  = 1
+
+	def onParseEnd( self, path, type ):
+		if self.version == 1:
+			self.requires.insert(0, (self.type or "js:module", "extend"))
 
 	def onModule( self, line, match ):
 		self.provides.append((self.type or "js:module",match.group(1)))
+
+	def onSugar2( self, line, match ):
+		self.version = 2
 
 	def onImport( self, line, match ):
 		line = line[len(match.group()):]
