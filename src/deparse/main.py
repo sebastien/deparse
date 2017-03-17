@@ -29,9 +29,13 @@ def run( args, recursive=False, mode=Tracker ):
 		res = find(args)
 		return res
 
+def process( text, path=None, recursive=True ):
+	tracker = Tracker()
+	tracker.fromText(text, path=path, recursive=recursive)
+	return tracker
+
 def command( args, name=None ):
 	"""The command-line interface of this module."""
-	USAGE = "{0} FILE...".format(name or os.path.basename(__file__))
 	if type(args) not in (type([]), type(())): args = [args]
 	oparser = argparse.ArgumentParser(
 		prog        = name or os.path.basename(__file__.split(".")[0]),
@@ -130,7 +134,9 @@ def command( args, name=None ):
 # MAIN
 #
 # -----------------------------------------------------------------------------
+
 if __name__ == "__main__":
 	import sys
 	command(sys.argv[1:])
 
+# EOF

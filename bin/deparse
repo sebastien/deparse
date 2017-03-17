@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 import deparse.main, sys, os
 deparse.main.command(sys.argv[1:], os.path.basename(__file__))
 # EOF

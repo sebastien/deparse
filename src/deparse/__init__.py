@@ -11,6 +11,7 @@
 
 from __future__ import print_function
 from .core import Tracker, Resolver, PARSERS, find, list, provides
+from .main import process
 
 __version__ = "0.3.1"
 LICENSE     = "http://ffctn.com/doc/licenses/bsd"

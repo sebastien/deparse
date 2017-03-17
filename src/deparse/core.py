@@ -62,6 +62,7 @@ class LineParser(object):
 
 	def __init__( self ):
 		self.path     = None
+		self.type     = None
 		self.provides = []
 		self.requires = []
 
@@ -76,6 +77,9 @@ class LineParser(object):
 		self.path = None
 		self.type = None
 		return self
+
+	def parseText( self, text, path=None, type=None ):
+		return self.parse(text, path=path, type=type)
 
 	def parse( self, text, path=None, type=None ):
 		self.onParse(path or self.path, type)
@@ -249,18 +253,18 @@ class Sugar(LineParser):
 
 	LINES = {
 		"onModule"  : "^@module\s+([^\s]+)",
-		"onSugar2"  : "^@feature\s+sugar\s*=\s*2.*$",
+		"onSugar2"  : "^@feature\s+sugar\s*[= ]\s*2.*$",
 		"onImport"  : "^@import",
 	}
 
 	def __init__( self ):
 		super(Sugar, self).__init__()
 
-	def onParse( self, path, type ):
+	def onParse( self, path, type=None ):
 		self.requires = []
 		self.version  = 1
 
-	def onParseEnd( self, path, type ):
+	def onParseEnd( self, path, type=None ):
 		if self.version == 1:
 			self.requires.insert(0, (self.type or "js:module", "extend"))
 
@@ -274,7 +278,7 @@ class Sugar(LineParser):
 		line = line[len(match.group()):]
 		if " from " in line: line = line.split(" from ", 1)[1]
 		for _ in line.split(","):
-			_ = _.strip()
+			_ = _.strip().split()[0]
 			if _:
 				self.requires.append((self.type or "js:module",_))
 
@@ -292,15 +296,53 @@ class Paml(LineParser):
 	SYMBOL_ATTR    = "(%s)(=('[^']+'|\"[^\"]+\"|([^),]+)))?" % (SYMBOL_NAME)
 	SYMBOL_ATTRS   = "^%s(,%s)*$" % (SYMBOL_ATTR, SYMBOL_ATTR)
 	RE_ATTRIBUTE   = re.compile(SYMBOL_ATTR)
+	RE_SCRIPT      = re.compile("(\t)*<script([^:\n]*)")
 
 	LINES = {
 		"onLinkTag"           : "^\t+<link\(",
 		"onJavaScriptTag"     : "^\t+<script\(",
-		"onJavaScriptRequire" : "^\t+@require\:js\(",
-		"onJavaScriptGModule" : "^\t+@require\:gmodule\(",
-		"onCSSRequire"        : "^\t+@require\:css\(",
+		"onJavaScriptRequire" : "^\t+@(import|require)\:js\(",
+		"onJavaScriptGModule" : "^\t+@(import|require)\:gmodule\(",
+		"onCSSRequire"        : "^\t+@(import|require)\:css\(",
 		"onInclude"           : "^\t+%include\s*"
 	}
+
+	def __init__( self ):
+		super(Paml, self).__init__()
+		self.subparser = None
+		self.subparserIndent = 0
+
+	def _getIndentation( self, line ):
+		i = 0
+		while i < len(line) and line[i] == "\t": i += 1
+		return i
+
+	def parseLine(self, line ):
+		# Paml can contain embedded languages, so we make sure
+		# we support them here.
+		script = self.RE_SCRIPT.match(line)
+		if self.subparser:
+			indent = self._getIndentation(line)
+			if indent > self.subparserIndent:
+				self.subparser.parseLine(line[indent:])
+			else:
+				self.subparser.onParseEnd(self.path, self.type)
+				self.subparser = None
+		if script:
+			if self.subparser:
+				self.subparser.onParseEnd(self.path, self.type)
+			indent = len(script.group(1))
+			lang   = script.group(2).split("@")[-1]
+			if lang == "sugar":
+				self.subparser = Sugar()
+			else:
+				self.subparser = JavaScript()
+			self.subparser.onParse(self.path, self.type)
+			# We bind the provides/requires
+			self.subparser.provides = self.provides
+			self.subparser.requires = self.requires
+			self.subparserIndent = indent
+		return super(Paml, self).parseLine(line)
 
 	def _parseAttributes( self, attributes ):
 		# NOTE: Borrowed and adapted from paml.engine.Parser._parsePAMLAttributes
@@ -496,11 +538,15 @@ class Tracker(object):
 		requires = sorted(requires, key=lambda _:len(self.nodes.get(_) or ()))
 		def load(module, loaded=loaded):
 			if module in loaded: return
+			index = len(loaded)
 			loaded.append(module)
 			for required in self.nodes.get(module) or ():
 				# NOTE: This is a bug, the modules should not import themselves
 				if required == module: continue
 				load(required, loaded)
+			del loaded[index]
+			if module not in loaded:
+				loaded.append(module)
 			return loaded
 		for _ in requires:
 			load(_)
@@ -530,6 +576,7 @@ class Resolver(object):
 		path    = path or os.getcwd()
 		if isinstance(elements, str) or isinstance(elements, unicode): elements=[elements]
 		for element in elements:
+			if isinstance(element, tuple): element = element[1]
 			for t,p in parsers:
 				matches.setdefault(element,[])
 				# We ensure an element is not present twice
