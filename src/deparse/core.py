@@ -69,11 +69,14 @@ class LineParser(object):
 	def parsePath( self, path, type=None ):
 		self.path = path
 		self.type = type
-		with open(path) as f:
-			self.onParse(path, type)
-			for line in f.readlines():
-				self.parseLine(line)
-			self.onParseEnd(path, type)
+		if not os.path.exists(path):
+			logging.error("{1} parser cannot parse path {0} because it does not exist.".format(path, self.__class__.__name__))
+		else:
+			with open(path) as f:
+				self.onParse(path, type)
+				for line in f.readlines():
+					self.parseLine(line)
+				self.onParseEnd(path, type)
 		self.path = None
 		self.type = None
 		return self
@@ -257,8 +260,9 @@ class Sugar(LineParser):
 		"onImport"  : "^@import",
 	}
 
-	def __init__( self ):
+	def __init__( self, version=1 ):
 		super(Sugar, self).__init__()
+		self.version = version
 
 	def onParse( self, path, type=None ):
 		self.requires = []
@@ -428,6 +432,53 @@ class PCSS(LineParser):
 		if path[0] == path[-1] and path[0] in '"\'': path = path[1:-1]
 		self.requires.append(("css:file", self.normpath(path)))
 
+
+# -----------------------------------------------------------------------------
+#
+# BLOCK PARSER
+#
+# -----------------------------------------------------------------------------
+
+class Block(LineParser):
+	"""Dependency parser for .block files."""
+
+	OPTIONS = {}
+
+	LINES = {
+		"onDirective" : "^@(\w[\w\d]*)(\s+.*)?$",
+		"onContent"   : "^\t(.*)$"
+	}
+
+	def __init__( self ):
+		super(Block, self).__init__()
+		self.blocks   = None
+
+	def onParse( self, path, type ):
+		super(Block, self).onParse(path, type)
+		self.blocks = []
+
+	def onParseEnd( self, path, type ):
+		super(Block, self).onParseEnd(path, type)
+		for lang, lines in self.blocks:
+			parser = None
+			if lang == "sugar2":
+				parser = Sugar(version=2)
+			elif lang == "paml":
+				parser = Paml()
+			elif lang == "pcss":
+				parser = PCSS()
+			if parser:
+				parser.parse("\n".join(lines), path=path)
+				self.provides += parser.provides
+				self.requires += parser.requires
+
+	def onDirective( self, line, match ):
+		self.blocks.append([match.group(1), []])
+
+	def onContent( self, line, match ):
+		if self.blocks:
+			self.blocks[-1][1].append(line[1:])
+
 # -----------------------------------------------------------------------------
 #
 # DEPENDENCIES
@@ -592,15 +643,16 @@ class Resolver(object):
 # -----------------------------------------------------------------------------
 
 PARSERS = {
-	"paml" : Paml,
-	"sjs"  : Sugar,
-	"js"   : JavaScript,
-	"pcss" : PCSS,
-	"c"    : C,
-	"cxx"  : C,
-	"c++"  : C,
-	"cpp"  : C,
-	"h"    : C,
+	"block" : Block,
+	"paml"  : Paml,
+	"sjs"   : Sugar,
+	"js"    : JavaScript,
+	"pcss"  : PCSS,
+	"c"     : C,
+	"cxx"   : C,
+	"c++"   : C,
+	"cpp"   : C,
+	"h"     : C,
 }
 
 # -----------------------------------------------------------------------------
