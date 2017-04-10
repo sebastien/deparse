@@ -10,7 +10,7 @@
 # -----------------------------------------------------------------------------
 
 import sys, os, argparse, fnmatch
-from .core import logging, Tracker, Resolver, PARSERS
+from .core import logging, Tracker, Resolver, find, PARSERS
 
 def run( args, recursive=False, mode=Tracker ):
 	"""Extracts the dependencies of the given files."""
@@ -105,29 +105,36 @@ def command( args, name=None ):
 	# === TRACKER =============================================================
 	if not args.find or args.recursive or args.list:
 		res = run(args.files, recursive=args.recursive, mode=Tracker)
-		# We're in dependency mode, so we list the dependencies referenced
-		# in the files given as arguments.
-		resolved = []
-		for item in res["requires"]:
-			t, n = item
-			for tp in args.types:
-				if fnmatch.fnmatch(t, tp):
-					if args.show_path or args.abs_path:
-						r = set(res["resolved"].get(item) or ())
-						if not r:
-							logging.error("Item {0} unresolved".format(item))
-						for p in r:
-							if p not in resolved:
-								resolved.append(p)
-								out.write(p if args.abs_path else os.path.relpath(p, cwd))
+		if not res:
+			logging.error("Command returned empty result")
+		elif "requires" not in res:
+			logging.warn("Arguments do not seem to require anything")
+		else:
+			# We're in dependency mode, so we list the dependencies referenced
+			# in the files given as arguments.
+			resolved = []
+			for item in res["requires"]:
+				t, n = item
+				for tp in args.types:
+					if fnmatch.fnmatch(t, tp):
+						if args.show_path or args.abs_path:
+							r = set(res["resolved"].get(item) or ())
+							# TODO: We might want an option to check for URLs
+							item_path = item[1]
+							if not r and "://" not in item_path:
+								logging.error("Item {0} unresolved".format(item))
+							for p in r:
+								if p not in resolved:
+									resolved.append(p)
+									out.write(p if args.abs_path else os.path.relpath(p, cwd))
+									out.write("\n")
+						else:
+							if n not in resolved:
+								resolved.append(n)
+								out.write(t)
+								out.write("\t")
+								out.write(n)
 								out.write("\n")
-					else:
-						if n not in resolved:
-							resolved.append(n)
-							out.write(t)
-							out.write("\t")
-							out.write(n)
-							out.write("\n")
 
 # -----------------------------------------------------------------------------
 #

@@ -52,12 +52,12 @@ class LineParser(object):
 	LINES   = {}
 	OPTIONS = {}
 	PATHS   = {
-		"js:module"   : ["lib/js"  , ""],
-		"js:gmodule"  : ["lib/js"  , ""],
-		"sjs:module"  : ["lib/sjs" , ""],
-		"sjs:gmodule" : ["lib/sjs" , ""],
-		"css:module"  : ["lib/css" , ""],
-		"pcss:module" : ["lib/pcss", ""],
+		"js:module"   : ["lib/js"  , "src/js"  , ""],
+		"js:gmodule"  : ["lib/js"  , "src/js"  , ""],
+		"sjs:module"  : ["lib/sjs" , "src/sjs" , ""],
+		"sjs:gmodule" : ["lib/sjs" , "src/sjs" , ""],
+		"css:module"  : ["lib/css" , "src/css" , ""],
+		"pcss:module" : ["lib/pcss", "src/pcss", ""],
 	}
 
 	def __init__( self ):
@@ -212,15 +212,18 @@ class JavaScript(LineParser):
 
 	# SEE: https://github.com/google/closure-library/wiki/goog.module:-an-ES6-module-like-alternative-to-goog.provide
 	LINES = {
-		"onRequire" : "(var\s+|exports\.)([\w\d_]+)\s*=\s*require\s*\(([^\)]+)\)(\.([\w\d_]+))?(\.([\w\d_]+))?\s*;?",
-		"onImport"  : "\s*import\s+({[^}]*}|\*(\s+as\s+[_\-\w]+)|[_\-\w]+)\s*(from\s+['\"]([^'\"]+)['\"])?",
+		"onRequire"       : "(var\s+|exports\.)([\w\d_]+)\s*=\s*require\s*\(([^\)]+)\)(\.([\w\d_]+))?(\.([\w\d_]+))?\s*;?",
+		"onImport"        : "\s*import\s+({[^}]*}|\*(\s+as\s+[_\-\w]+)|[_\-\w]+)\s*(from\s+['\"]([^'\"]+)['\"])?",
 		"onGoogleProvide" : "goog\.(provide|module)\s*\(['\"](^['\"]+)['\"]\)",
 		"onGoogleRequire" : "goog\.require\s*\(['\"](^['\"]+)['\"]\)",
 	}
 
 	def onParse( self, path, type ):
-		module  = os.path.basename(path).rsplit("-",1)[0]
-		self.provides = [(self.type or "js:module", module)]
+		if path:
+			module  = os.path.basename(path).rsplit("-",1)[0]
+			self.provides = [(self.type or "js:module", module)]
+		else:
+			self.provdes = []
 
 	def onRequire( self, line, match ):
 		decl, name, module, __, symbol, __, subsymbol = match.groups()
@@ -335,7 +338,7 @@ class Paml(LineParser):
 		if script:
 			if self.subparser:
 				self.subparser.onParseEnd(self.path, self.type)
-			indent = len(script.group(1))
+			indent = len(script.group(1) or "")
 			lang   = script.group(2).split("@")[-1]
 			if lang == "sugar":
 				self.subparser = Sugar()
@@ -405,11 +408,38 @@ class Paml(LineParser):
 
 # -----------------------------------------------------------------------------
 #
+# CSS PARSER
+#
+# -----------------------------------------------------------------------------
+
+class CSS(LineParser):
+	"""Dependency parser for PCSS files."""
+
+	OPTIONS = {}
+
+	LINES = {
+		"onImport"  : "^@import\s+(.+)",
+		"onURL"     : "^.*url\(([^\)]+)\)"
+	}
+
+	def onImport( self, line, match ):
+		path = match.group(1).strip()
+		if path[0] == path[-1] and path[0] in '"\'': path = path[1:-1]
+		self.requires.append(("css:file", self.normpath(path)))
+
+	def onURL( self, line, match ):
+		url = match.group(1)
+		if url[0] == url[-1] and url[0] in "\"'": url = url[1:-1]
+		if url.startswith("file://"): url = url[7:]
+		self.requires.append(("*", url if "://" in url else self.normpath(url.split("?",1)[0].split("#",1)[0])))
+
+# -----------------------------------------------------------------------------
+#
 # PCSS PARSER
 #
 # -----------------------------------------------------------------------------
 
-class PCSS(LineParser):
+class PCSS(CSS):
 	"""Dependency parser for PCSS files."""
 
 	OPTIONS = {}
@@ -417,7 +447,8 @@ class PCSS(LineParser):
 	LINES = {
 		"onModule"  : "^@module\s+([^\s]+)",
 		"onInclude" : "^@include\s+([^\s]+)",
-		"onImport"  : "^@@import\s+(.+)",
+		"onImport"  : "^@import\s+(.+)",
+		"onURL"     : "^.*url\(([^\)]+)\)"
 	}
 
 	def onModule( self, line, match ):
@@ -426,12 +457,6 @@ class PCSS(LineParser):
 	def onInclude( self, line, match ):
 		path = match.group(1).strip()
 		self.requires.append(("pcss:file", self.normpath(path)))
-
-	def onImport( self, line, match ):
-		path = match.group(1).strip()
-		if path[0] == path[-1] and path[0] in '"\'': path = path[1:-1]
-		self.requires.append(("css:file", self.normpath(path)))
-
 
 # -----------------------------------------------------------------------------
 #
@@ -561,8 +586,9 @@ class Tracker(object):
 					continue
 				resolved = self.resolve(parser, dependency, path)
 				if recursive:
-					if not resolved:
-						logging.error("Cannot recurse on {0} in {1}: dependency {0} cannot be resolved".format(dependency, path))
+					# FIXME: Support url
+					# if not resolved and "://" not in dependency[1]:
+					# 	logging.error("Cannot recurse on {0} in {1}: dependency {0} cannot be resolved".format(dependency, path))
 					for dependency_path in resolved:
 						self._fromPath(dependency_path, recursive=recursive, type=dependency_type)
 
@@ -578,7 +604,10 @@ class Tracker(object):
 		one file)."""
 		res = [_[1] for _ in parser.resolve(item, path)] or ()
 		t, name = item
-		if name not in self.resolved: self.resolved[item] = []
+		if name not in self.resolved:
+			# If the item path exists (but does not have a parser), then
+			# we add it as resolved.
+			self.resolved[item] = [item[1]] if os.path.exists(item[1]) else []
 		self.resolved[item] = self._merge(self.resolved[item], res)
 		return res
 
@@ -648,6 +677,7 @@ PARSERS = {
 	"sjs"   : Sugar,
 	"js"    : JavaScript,
 	"pcss"  : PCSS,
+	"css"   : CSS,
 	"c"     : C,
 	"cxx"   : C,
 	"c++"   : C,
