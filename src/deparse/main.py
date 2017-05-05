@@ -58,8 +58,9 @@ def command( args, name=None ):
 	oparser.add_argument("-l", "--list",      dest="list",    action="store_true", default=False,
 			help="Lists the dependencies of the given symbols (find mode)")
 	oparser.add_argument("-f", "--find",      dest="find",    action="store_true", default=False,
-			help="Finds the files corresponding to the given symbols (find mode)"
-	)
+			help="Finds the files corresponding to the given symbols (find mode)")
+	oparser.add_argument("-s", "--separator",      dest="sep",    action="store", default="\t",
+			help="Sets the field separator in output")
 	# We create the parse and register the options
 	args     = oparser.parse_args(args=args)
 	out      = sys.stdout
@@ -87,18 +88,17 @@ def command( args, name=None ):
 				if args.show_path or args.abs_path:
 					if path not in paths:
 						if args.abs_path:
-							out.write(os.path.abspath(n))
+							out.write(os.path.abspath(path))
 						else:
-							out.write(n + ":")
-							out.write(os.path.relpath(n,cwd))
+							out.write(os.path.relpath(path,cwd))
 						out.write("\n")
 				elif not args.list or not args.recursive:
 					out.write(name)
-					out.write("\t")
+					out.write(args.sep)
 					out.write(path)
-					out.write("\t")
+					out.write(args.sep)
 					out.write(",".join(groups.get(path)))
-					out.write("\n")
+					out.write(args.sep)
 				paths.append(path)
 		if args.list or args.recursive:
 			args.files = paths
