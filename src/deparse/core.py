@@ -115,6 +115,7 @@ class LineParser(object):
 		"""Finds the actual path for the given item `(type, name)`, returning
 		a list of the matching paths (the item might be implemented by more than
 		one file)."""
+		cwd     = os.path.abspath(".")
 		t, name = item
 		res     = []
 		dirs    = [_ for _ in dirs] + [os.getcwd(), os.path.dirname(os.path.abspath(path)) if not os.path.isdir(path) else os.path.abspath(path)]
@@ -136,9 +137,9 @@ class LineParser(object):
 		if t and t in ("js:component", "sjs:component"):
 			res += Component.Resolve(item, path ,dirs)
 		if not t or t in ("css:module" ,"pcss:module"):
-			all_dirs = self._subdirs(dirs, *self.PATHS["css:module"])
+			all_dirs = [cwd] + self._subdirs(dirs, *self.PATHS["css:module"])
 			css_modules  = sorted([("css:module",  _) for _ in self._glob(all_dirs, "{0}.css".format(name))])
-			all_dirs = self._subdirs(dirs, *self.PATHS["pcss:module"])
+			all_dirs = [cwd] + self._subdirs(dirs, *self.PATHS["pcss:module"])
 			pcss_modules = sorted([("pcss:module", _) for _ in self._glob(all_dirs, "{0}*.pcss".format(name))])
 			res += pcss_modules if pcss_modules else (css_modules[-1],) if css_modules else ()
 		if not t or t.endswith(":file"):
@@ -467,6 +468,11 @@ class PCSS(CSS):
 	def onInclude( self, line, match ):
 		path = match.group(1).strip()
 		self.requires.append(("pcss:file", self.normpath(path)))
+
+	def onImport( self, line, match ):
+		path = match.group(1).strip()
+		if path[0] == path[-1] and path[0] in '"\'': path = path[1:-1]
+		self.requires.append(("css:module", self.normpath(path)))
 
 # -----------------------------------------------------------------------------
 #
