@@ -110,6 +110,7 @@ class LineParser(object):
 	def onParseEnd( self, path, type ):
 		pass
 
+	# FIXME: From an architecture standpoint, this should be pluggable.
 	def resolve( self, item, path, dirs=(), verbose=False ):
 		"""Finds the actual path for the given item `(type, name)`, returning
 		a list of the matching paths (the item might be implemented by more than
@@ -118,21 +119,23 @@ class LineParser(object):
 		res     = []
 		dirs    = [_ for _ in dirs] + [os.getcwd(), os.path.dirname(os.path.abspath(path)) if not os.path.isdir(path) else os.path.abspath(path)]
 		# TODO: Support resolvers
-		if not t or t == "js:module":
+		if not t or t in ("js:module", "sjs:module"):
 			name = name.replace(".", "/")
 			all_dirs = self._subdirs(dirs, *self.PATHS["js:module"])
 			js_modules  = sorted([("js:module", _) for _ in self._glob(all_dirs, "{0}-*.js".format(name,)) if ".gmodule" not in _])
 			all_dirs = self._subdirs(dirs, *self.PATHS["sjs:module"])
 			sjs_modules = sorted([("sjs:module", _) for _ in self._glob(all_dirs, "{0}.sjs".format(name ),  "{0}*-*.sjs".format(name))])
 			res += sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
-		if not t or t == "js:gmodule":
+		if not t or t in ("js:gmodule", "sjs:gmodule"):
 			name = name.replace(".", "/")
 			all_dirs = self._subdirs(dirs, *self.PATHS["js:module"])
 			js_modules  = sorted([("js:gmodule", _) for _ in self._glob(all_dirs, "{0}-*.js".format(name)) if ".gmodule" in _])
 			all_dirs = self._subdirs(dirs, *self.PATHS["sjs:module"])
 			sjs_modules = sorted([("sjs:gmodule", _) for _ in self._glob(all_dirs, "{0}*.sjs".format(name), "{0}*-*.sjs".format(name))])
 			res += sjs_modules if sjs_modules else (js_modules[-1],) if js_modules else ()
-		if not t or t == "css:module":
+		if t and t in ("js:component", "sjs:component"):
+			res += Component.Resolve(item, path ,dirs)
+		if not t or t in ("css:module" ,"pcss:module"):
 			all_dirs = self._subdirs(dirs, *self.PATHS["css:module"])
 			css_modules  = sorted([("css:module",  _) for _ in self._glob(all_dirs, "{0}.css".format(name))])
 			all_dirs = self._subdirs(dirs, *self.PATHS["pcss:module"])
@@ -311,6 +314,7 @@ class Paml(LineParser):
 		"onJavaScriptRequire" : "^\t+@(import|require)\:js\(",
 		"onJavaScriptGModule" : "^\t+@(import|require)\:gmodule\(",
 		"onCSSRequire"        : "^\t+@(import|require)\:css\(",
+		"onComponent"         : "^\t.*[,(]data-component=([^,)]+)",
 		"onInclude"           : "^\t+%include\s*"
 	}
 
@@ -396,6 +400,12 @@ class Paml(LineParser):
 
 	def onCSSRequire( self, line, match ):
 		return self.onJavaScriptRequire(line, match, type="css:module")
+
+	def onComponent( self, line, match ):
+		component = match.group(1).strip()
+		if component[0] == component[-1] and component[-1] in "'\"":
+			component = component[1:-1]
+		self.requires.append(("js:component", component))
 
 	def onInclude( self, line, match ):
 		line = line[len(match.group()):]
@@ -506,6 +516,47 @@ class Block(LineParser):
 
 # -----------------------------------------------------------------------------
 #
+# COMPONENT PARSER
+#
+# -----------------------------------------------------------------------------
+
+class Component(LineParser):
+	"""Parses component directories."""
+
+	OPTIONS = {
+		"path"  : ["components"],
+		"files" : (
+			("js:module",  "model.js"),
+			("sjs:module", "model.sjs"),
+			("js:module",  "view.js"),
+			("paml:file",   "view.xml.paml"),
+			("xml:file",        "view.xml"),
+			("html:file",       "view.html"),
+			("css:file",        "style.css"),
+			("pcss:file",       "style.pcss"),
+			("hjson:file",      "options.hjson"),
+			("json:file",       "options.json"),
+		)
+	}
+
+	@classmethod
+	def Resolve( cls, item, path, dirs=(), verbose=False ):
+		res     = []
+		dirs    = set([_ for _ in dirs] + [os.getcwd(), os.path.dirname(os.path.abspath(path)) if not os.path.isdir(path) else os.path.abspath(path)])
+		for parent in dirs:
+			for sub in cls.OPTIONS["path"]:
+				d = os.path.join(os.path.join(parent, sub), item[1])
+				for t,f in cls.OPTIONS["files"]:
+					p = os.path.join(d, f)
+					if os.path.exists(p):
+						res.append((t,p))
+		return res
+
+	def __init__( self ):
+		super(Component, self).__init__()
+
+# -----------------------------------------------------------------------------
+#
 # DEPENDENCIES
 #
 # -----------------------------------------------------------------------------
@@ -589,10 +640,14 @@ class Tracker(object):
 					# FIXME: Support url
 					# if not resolved and "://" not in dependency[1]:
 					# 	logging.error("Cannot recurse on {0} in {1}: dependency {0} cannot be resolved".format(dependency, path))
-					for dependency_path in resolved:
+					for dependency_type, dependency_path in resolved:
 						self._fromPath(dependency_path, recursive=recursive, type=dependency_type)
 
+	# FIXME: Architecturally, this is a helper function and should be moved
+	# out of the class if used elsewhere.
 	def _merge( self, a, b ):
+		"""Merges the elemetns of B into A, only if the elements
+		are not arelady in A."""
 		for e in b:
 			if e not in a:
 				a.append(e)
@@ -600,14 +655,15 @@ class Tracker(object):
 
 	def resolve( self, parser, item, path ):
 		"""Finds the actual path for the given item `(type, name)`, returning
-		a list of the matching paths (the item might be implemented by more than
+		a list of the matching (type, paths) (the item might be implemented by more than
 		one file)."""
-		res = [_[1] for _ in parser.resolve(item, path)] or ()
+		res = [_ for _ in parser.resolve(item, path)] or ()
 		t, name = item
-		if name not in self.resolved:
+		# NOTE: We hash on the *item* as a symbol might have more than one file
+		if item not in self.resolved:
 			# If the item path exists (but does not have a parser), then
 			# we add it as resolved.
-			self.resolved[item] = [item[1]] if os.path.exists(item[1]) else []
+			self.resolved[item] = [item] if os.path.exists(item[1]) else []
 		self.resolved[item] = self._merge(self.resolved[item], res)
 		return res
 
@@ -672,7 +728,7 @@ class Resolver(object):
 # -----------------------------------------------------------------------------
 
 PARSERS = {
-	"block" : Block,
+	"block"     : Block,
 	"paml"  : Paml,
 	"sjs"   : Sugar,
 	"js"    : JavaScript,
@@ -683,6 +739,7 @@ PARSERS = {
 	"c++"   : C,
 	"cpp"   : C,
 	"h"     : C,
+	".component" : Component
 }
 
 # -----------------------------------------------------------------------------

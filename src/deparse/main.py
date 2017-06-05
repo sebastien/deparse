@@ -123,7 +123,7 @@ def command( args, name=None ):
 							item_path = item[1]
 							if not r and "://" not in item_path:
 								logging.error("Item {0} unresolved".format(item))
-							for p in r:
+							for t,p in r:
 								if p not in resolved:
 									resolved.append(p)
 									out.write(p if args.abs_path else os.path.relpath(p, cwd))
