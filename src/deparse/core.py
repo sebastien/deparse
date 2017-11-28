@@ -31,6 +31,9 @@ try:
 except ImportError as e:
 	import logging
 
+if sys.version_info.major >= 3:
+	unicode = str
+
 __doc__ = """
 *deparse* extracts/lists and resolves dependencies from a variety of files.
 Tracker are listed as couples `(<type>, <name>)` where type is a string like
