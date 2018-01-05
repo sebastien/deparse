@@ -16,10 +16,10 @@ def run( args, recursive=False, mode=Tracker ):
 	"""Extracts the dependencies of the given files."""
 	if isinstance(args, str): args = [args]
 	if mode == Tracker:
-		deps = Tracker()
+		tracker = Tracker()
 		res  = None
 		for _ in args:
-			r = (deps.fromPath(_, recursive=recursive))
+			r = (tracker.fromPath(_, recursive=recursive))
 			if not res:
 				res = r
 			else:
@@ -103,7 +103,7 @@ def command( args, name=None ):
 		if args.list or args.recursive:
 			args.files = paths
 	# === TRACKER =============================================================
-	if not args.find or args.recursive or args.list:
+	elif args.recursive or args.list:
 		res = run(args.files, recursive=args.recursive, mode=Tracker)
 		if not res:
 			logging.error("Command returned empty result")
@@ -118,6 +118,8 @@ def command( args, name=None ):
 				for tp in args.types:
 					if fnmatch.fnmatch(t, tp):
 						if args.show_path or args.abs_path:
+							# FIXME: For some reason the files are not
+							# always resolved there, so we add them.
 							r = set(res["resolved"].get(item) or ())
 							# TODO: We might want an option to check for URLs
 							item_path = item[1]

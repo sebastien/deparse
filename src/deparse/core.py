@@ -147,11 +147,14 @@ class LineParser(object):
 			res += pcss_modules if pcss_modules else (css_modules[-1],) if css_modules else ()
 		if not t or t.endswith(":file"):
 			altname = name + ("." + t.split(":",1)[0] if t else "")
-			for n in (name, altname):
+			ext     = name.rsplit(".", 1)[-1]
+			visited = []
+			for n in (name, altname, "lib/" + ext + "/" + name, "lib/" + ext + "/", altname):
 				for d in dirs:
 					p = os.path.join(d, n)
-					if os.path.exists(p):
+					if p not in visited and os.path.exists(p):
 						res.append(("*:file", p))
+						visited.append(p)
 		if t and t.endswith(":url"):
 			res.append(item)
 		res = self._resolve( res, item, path, dirs=() )
@@ -279,8 +282,9 @@ class Sugar(LineParser):
 		self.version  = 1
 
 	def onParseEnd( self, path, type=None ):
-		if self.version == 1:
-			self.requires.insert(0, (self.type or "js:module", "extend"))
+		pass
+		# if self.version == 1:
+		# 	self.requires.insert(0, (self.type or "js:module", "extend"))
 
 	def onModule( self, line, match ):
 		self.provides.append((self.type or "js:module",match.group(1)))
@@ -427,7 +431,7 @@ class Paml(LineParser):
 # -----------------------------------------------------------------------------
 
 class CSS(LineParser):
-	"""Dependency parser for PCSS files."""
+	"""Dependency parser for (P)CSS files."""
 
 	OPTIONS = {}
 
@@ -503,25 +507,30 @@ class Block(LineParser):
 
 	def onParseEnd( self, path, type ):
 		super(Block, self).onParseEnd(path, type)
-		for lang, lines in self.blocks:
+		for name, params, lines in self.blocks:
 			parser = None
-			if lang == "sugar2":
+			if name == "sugar2":
 				parser = Sugar(version=2)
-			elif lang == "paml":
+			elif name == "paml":
 				parser = Paml()
-			elif lang == "pcss":
+			elif name == "pcss":
 				parser = PCSS()
+			elif name == "import":
+				self.requires += [("{0}:file".format(_.rsplit(".",1)[-1]), _.strip()) for _ in params.split(" ") if _.strip()]
+			elif name == "component":
+				self.requires += [("component", _.strip()) for _ in params.split(" ") if _.strip()]
+			# TODO: Texto
 			if parser:
 				parser.parse("\n".join(lines), path=path)
 				self.provides += parser.provides
 				self.requires += parser.requires
 
 	def onDirective( self, line, match ):
-		self.blocks.append([match.group(1), []])
+		self.blocks.append([match.group(1), match.group(2), []])
 
 	def onContent( self, line, match ):
 		if self.blocks:
-			self.blocks[-1][1].append(line[1:])
+			self.blocks[-1][2].append(line[1:])
 
 # -----------------------------------------------------------------------------
 #
@@ -538,21 +547,24 @@ class Component(LineParser):
 			("js:module",  "model.js"),
 			("sjs:module", "model.sjs"),
 			("js:module",  "view.js"),
-			("paml:file",   "view.xml.paml"),
-			("xml:file",        "view.xml"),
-			("html:file",       "view.html"),
-			("css:file",        "style.css"),
-			("pcss:file",       "style.pcss"),
-			("hjson:file",      "options.hjson"),
-			("json:file",       "options.json"),
+			("paml:file",  "view.xml.paml"),
+			("xml:file",   "view.xml"),
+			("html:file",  "view.html"),
+			("css:file",   "style.css"),
+			("pcss:file",  "style.pcss"),
+			("hjson:file", "options.hjson"),
+			("json:file",  "options.json"),
 		)
 	}
 
 	@classmethod
 	def Resolve( cls, item, path, dirs=(), verbose=False ):
 		res     = []
-		dirs    = set([_ for _ in dirs] + [os.getcwd(), os.path.dirname(os.path.abspath(path)) if not os.path.isdir(path) else os.path.abspath(path)])
-		for parent in dirs:
+		dirs    = dirs or cls.OPTIONS["path"]
+		paths   = [_ for _ in dirs] + [os.getcwd()]
+		if path:
+			paths.append(os.path.dirname(os.path.abspath(path)) if not os.path.isdir(path) else os.path.abspath(path))
+		for parent in set(paths):
 			for sub in cls.OPTIONS["path"]:
 				d = os.path.join(os.path.join(parent, sub), item[1])
 				for t,f in cls.OPTIONS["files"]:
@@ -564,6 +576,9 @@ class Component(LineParser):
 	def __init__( self ):
 		super(Component, self).__init__()
 
+	def resolve( self, item, path, dirs=(), verbose=False ):
+		return self.Resolve(item, path, dirs)
+
 # -----------------------------------------------------------------------------
 #
 # DEPENDENCIES
@@ -574,12 +589,13 @@ class Tracker(object):
 	"""Extracts and aggregates dependencies."""
 
 	def __init__( self ):
-		self.PARSERS = PARSERS
-		self.provides = []
-		self.requires = []
-		self.paths    = []
-		self.resolved = {}
-		self.nodes    = {}
+		self.PARSERS   = PARSERS
+		self.provides  = []
+		self.requires  = []
+		self.paths     = []
+		self.resolved  = {}
+		self.nodes     = {}
+		self._resolver = None
 
 	def fromPath( self, path, recursive=False ):
 		"""Lists the dependencies at the given path in import priority. This
@@ -606,16 +622,18 @@ class Tracker(object):
 		}
 
 	def _fromPath( self, path, recursive=False, type=None ):
-		"""Helper function of the `fromPath` method. Gets a parser
+		"""Helper function of the `Tracker.fromPath` method. Gets a parser
 		for the given file type, parses the file at the given path and
 		merges the `Parser.provides`/`Parser.requires`.
 		"""
 		if not os.path.exists(path) and "+" in path:
+			# We're given a  '+'-separated list of paths, so we split it
 			paths  = path.split("+")
 			prefix = os.path.dirname(paths[0])
 			paths  = [paths[0]] + [os.path.join(prefix, _) for _ in paths[1:]]
 			return [self._fromPath(_, recursive=recursive, item=item) for _ in paths]
 		elif path in self.paths:
+			# We've already scanned that path, so we return as-is
 			return self
 		elif os.path.isdir(path):
 			# We skip directories
@@ -666,8 +684,16 @@ class Tracker(object):
 		"""Finds the actual path for the given item `(type, name)`, returning
 		a list of the matching (type, paths) (the item might be implemented by more than
 		one file)."""
+		# We resolve with the parser first
 		res = [_ for _ in parser.resolve(item, path)] or ()
 		t, name = item
+		# If we haven't found anything, we use the resolver
+		if not res:
+			if not self._resolver:
+				self._resolver = Resolver(self.PARSERS)
+			r = self._resolver.find([item], path)
+			if name in r:
+				res = r[name]
 		# NOTE: We hash on the *item* as a symbol might have more than one file
 		if item not in self.resolved:
 			# If the item path exists (but does not have a parser), then
@@ -706,9 +732,9 @@ class Tracker(object):
 class Resolver(object):
 	"""Resolves (symbol) names into files."""
 
-	def __init__( self ):
+	def __init__( self, parsers=None ):
 		super(Resolver, self).__init__()
-		self.PARSERS = PARSERS
+		self.PARSERS = parsers or PARSERS
 		self.paths = []
 
 	def addPath( self, path ):
@@ -738,17 +764,17 @@ class Resolver(object):
 
 PARSERS = {
 	"block"     : Block,
-	"paml"  : Paml,
-	"sjs"   : Sugar,
-	"js"    : JavaScript,
-	"pcss"  : PCSS,
-	"css"   : CSS,
-	"c"     : C,
-	"cxx"   : C,
-	"c++"   : C,
-	"cpp"   : C,
-	"h"     : C,
-	".component" : Component
+	"paml"      : Paml,
+	"sjs"       : Sugar,
+	"js"        : JavaScript,
+	"pcss"      : PCSS,
+	"css"       : CSS,
+	"c"         : C,
+	"cxx"       : C,
+	"c++"       : C,
+	"cpp"       : C,
+	"h"         : C,
+	"component" : Component
 }
 
 # -----------------------------------------------------------------------------
