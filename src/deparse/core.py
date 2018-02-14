@@ -184,6 +184,13 @@ class LineParser(object):
 				matches += glob.glob(p)
 		return sorted(matches)
 
+	def _normalizeSymbol( self, type, name ):
+		if type:
+			type = type + ":*"
+		else:
+			type = "*"
+		return (type, name)
+
 	def export( self ):
 		return dict(
 			path=self.path,
@@ -318,12 +325,15 @@ class Paml(LineParser):
 
 	LINES = {
 		"onLinkTag"           : "^\t+<link\(",
+		"onImportPragma"      : "^\s*#\s*@import\s*([\w\.\-_]+)(\!(\w+))?",
 		"onJavaScriptTag"     : "^\t+<script\(",
 		"onJavaScriptRequire" : "^\t+@(import|require)\:js\(",
 		"onJavaScriptGModule" : "^\t+@(import|require)\:gmodule\(",
+		"onJavaScriptModule"  : "^\t+@(import|require)\:module\(",
 		"onCSSRequire"        : "^\t+@(import|require)\:css\(",
 		"onComponent"         : "^\t.*[,(]data-component=([^,)]+)",
-		"onInclude"           : "^\t+%include\s*"
+		"onInclude"           : "^\t+%include\s*",
+		"onJSXImport"         : "^\t*\<jsx::import\(([^\)]+)\)$",
 	}
 
 	def __init__( self ):
@@ -387,16 +397,21 @@ class Paml(LineParser):
 	def onLinkTag( self, line, match ):
 		attrs = self._parseAttributes(line.split('(', 1)[-1].rsplit(")",1)[0])
 		url = attrs.get("href")
-		if attrs.get("rel") == "stylesheet" and url:
+		if attrs.get("rel") == "stylesheet" and url and "{$" not in url:
+			if "url(" in url:
+				url = url.split("url(", 1)[-1].split(")", 1)[0]
 			if "://" in url:
 				self.requires.append(("css:url",  url))
 			else:
 				self.requires.append(("css:file", url))
 
 	def onJavaScriptTag( self, line, match ):
-		src = line.split("src=",1)[1].split(",")[0].split(")")[0]
-		if src[0] == src[-1] and src[0] in '"\'': src = src[1:-1]
-		self.requires.append(("js:file", src))
+		if "src=" in line:
+			src = line.split("src=",1)[1].split(",")[0].split(")")[0]
+			if src[0] == src[-1] and src[0] in '"\'': src = src[1:-1]
+			# We strip sources with template expressions
+			if "{$" not in src:
+				self.requires.append(("js:file", src))
 
 	def onJavaScriptRequire( self, line, match, type="js:module"):
 		reqs = line.split("(",1)[1].rsplit(")",1)[0].split(",")
@@ -405,6 +420,18 @@ class Paml(LineParser):
 
 	def onJavaScriptGModule( self, line, match ):
 		return self.onJavaScriptRequire(line, match, type="js:gmodule")
+
+	def onImportPragma( self, line, match ):
+		symbol = match.group(1)
+		type   = match.group(3)
+		d = (type + ":module" if type else "*", symbol)
+		if d not in self.requires:
+			self.requires.append(d)
+
+	def onJSXImport( self, line, match):
+		p = dict((v.strip() for v in w.split("=")) for w in match.group(1).split(","))
+		if "from" in p:
+			self.requires.append(("js:module", p["from"]))
 
 	def onCSSRequire( self, line, match ):
 		return self.onJavaScriptRequire(line, match, type="css:module")
@@ -479,7 +506,14 @@ class PCSS(CSS):
 	def onImport( self, line, match ):
 		path = match.group(1).strip()
 		if path[0] == path[-1] and path[0] in '"\'': path = path[1:-1]
-		self.requires.append(("css:module", self.normpath(path)))
+		if "url(" in path:
+			path = path.split("url(", 1)[-1].split(")", 1)[0].strip()
+			if path[0] == path[-1]:
+				path = path[1:-1]
+			# NOTE: We don't want to normalize the path as the URL
+			self.requires.append(("css:file", path))
+		else:
+			self.requires.append(("css:module", self.normpath(path)))
 
 # -----------------------------------------------------------------------------
 #
@@ -504,6 +538,8 @@ class Block(LineParser):
 	def onParse( self, path, type ):
 		super(Block, self).onParse(path, type)
 		self.blocks = []
+		# All block require the block.xsl.paml file
+		self.requires.append(("*", "block.xsl"))
 
 	def onParseEnd( self, path, type ):
 		super(Block, self).onParseEnd(path, type)
@@ -579,6 +615,7 @@ class Component(LineParser):
 	def resolve( self, item, path, dirs=(), verbose=False ):
 		return self.Resolve(item, path, dirs)
 
+
 # -----------------------------------------------------------------------------
 #
 # DEPENDENCIES
@@ -587,6 +624,10 @@ class Component(LineParser):
 
 class Tracker(object):
 	"""Extracts and aggregates dependencies."""
+
+	IGNORES = [
+		"svg"
+	]
 
 	def __init__( self ):
 		self.PARSERS   = PARSERS
@@ -646,7 +687,8 @@ class Tracker(object):
 			parser_type = self.PARSERS.get(ext)
 			# We return and log an error if there's no matching parser
 			if not parser_type:
-				logging.error("Parser not defined for type `{0}` in: {1}".format(ext, path))
+				if ext not in self.IGNORES:
+					logging.error("Parser not defined for type `{0}` in: {1}".format(ext, path))
 				return
 			# We do the parsing, merging back the provided and required elements.
 			parser      = parser_type().parsePath(path, type=type)
