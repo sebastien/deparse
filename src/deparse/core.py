@@ -430,7 +430,9 @@ class Paml(LineParser):
 
 	def onJSXImport( self, line, match):
 		p = dict((v.strip() for v in w.split("=")) for w in match.group(1).split(","))
-		if "from" in p:
+		if "component" in p:
+			self.requires.append(("js:component", p["component"]))
+		elif "from" in p:
 			self.requires.append(("js:module", p["from"]))
 
 	def onCSSRequire( self, line, match ):
@@ -554,6 +556,7 @@ class Block(LineParser):
 			elif name == "import":
 				self.requires += [("{0}:file".format(_.rsplit(".",1)[-1]), _.strip()) for _ in params.split(" ") if _.strip()]
 			elif name == "component":
+				# TODO: Strip binding and attributes
 				self.requires += [("component", _.strip()) for _ in params.split(" ") if _.strip()]
 			# TODO: Texto
 			if parser:
