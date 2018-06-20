@@ -191,6 +191,12 @@ class LineParser(object):
 			type = "*"
 		return (type, name)
 
+	def _unquote( self, text ):
+		if text and len(text) > 1 and text[0] == text[-1] and text[0] in '\'"':
+			return text[1:-1]
+		else:
+			return text
+
 	def export( self ):
 		return dict(
 			path=self.path,
@@ -431,9 +437,9 @@ class Paml(LineParser):
 	def onJSXImport( self, line, match):
 		p = dict((v.strip() for v in w.split("=")) for w in match.group(1).split(","))
 		if "component" in p:
-			self.requires.append(("js:component", p["component"]))
+			self.requires.append(("js:component", self._unquote(p["component"])))
 		elif "from" in p:
-			self.requires.append(("js:module", p["from"]))
+			self.requires.append(("js:module", self._unquote(p["from"])))
 
 	def onCSSRequire( self, line, match ):
 		return self.onJavaScriptRequire(line, match, type="css:module")
