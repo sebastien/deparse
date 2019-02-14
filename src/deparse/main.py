@@ -6,7 +6,7 @@
 # License           : BSD License
 # -----------------------------------------------------------------------------
 # Creation date     : 2016-11-25
-# Last modification : 2016-12-21
+# Last modification : 2019-02-14
 # -----------------------------------------------------------------------------
 
 import sys, os, argparse, fnmatch
@@ -83,7 +83,7 @@ def command( args, name=None ):
 				groups.setdefault(path,[])
 				groups[path].append(t)
 			if not resolved:
-				logging.error("Could not resolve: `{0}`".format(name))
+				logging.error("find:Could not resolve: `{0}`".format(name))
 			for path in sorted(groups.keys()):
 				if args.show_path or args.abs_path:
 					if path not in paths:
@@ -124,7 +124,7 @@ def command( args, name=None ):
 							# TODO: We might want an option to check for URLs
 							item_path = item[1]
 							if not r and "://" not in item_path:
-								logging.error("Item {0} unresolved".format(item))
+								logging.error("track:Item {0} unresolved".format(item))
 							for t,p in r:
 								if p not in resolved:
 									resolved.append(p)
@@ -148,4 +148,4 @@ if __name__ == "__main__":
 	import sys
 	command(sys.argv[1:])
 
-# EOF
+# EOF - vim: ts=4 sw=4 noet

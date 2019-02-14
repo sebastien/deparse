@@ -5,13 +5,17 @@
 # License           : BSD License
 # -----------------------------------------------------------------------------
 # Creation date     : 2016-11-25
-# Last modification : 2016-12-21
+# Last modification : 2019-02-14
 # -----------------------------------------------------------------------------
 
 from __future__ import print_function
 
 import sys, os, re, glob, argparse, fnmatch
 from   functools import reduce
+
+# TODO: Using tuples instead of proper data types was a big arhcitectural
+# mistake. It makes it very hard to enforce type safetype and understand 
+# what type of value we're dealing with.
 
 # TODO: We should introduce a high-level tracker/resolver (maybe as
 # catalogue) that does caching. It should basically maintain
@@ -500,9 +504,16 @@ class PCSS(CSS):
 	LINES = {
 		"onModule"  : "^@module\s+([^\s]+)",
 		"onInclude" : "^@include\s+([^\s]+)",
-		"onImport"  : "^@import\s+(.+)",
+		"onImport"  : "^@(import|use)\s+(.+)",
 		"onURL"     : "^.*url\(([^\)]+)\)"
 	}
+
+	def onURL( self, line, match ):
+		url = match.group(1)
+		# NOTE: PCSS has template expressions with backquotes and $. This
+		# is a crude way of detecting it.
+		if not ("`" in url and "$" in url):
+			return CSS.onURL(self, line, match)
 
 	def onModule( self, line, match ):
 		self.provides.append(("pcss:module",match.group(1)))
@@ -512,7 +523,7 @@ class PCSS(CSS):
 		self.requires.append(("pcss:file", self.normpath(path)))
 
 	def onImport( self, line, match ):
-		path = match.group(1).strip()
+		path = match.group(2).strip()
 		if path[0] == path[-1] and path[0] in '"\'': path = path[1:-1]
 		if "url(" in path:
 			path = path.split("url(", 1)[-1].split(")", 1)[0].strip()
@@ -521,7 +532,7 @@ class PCSS(CSS):
 			# NOTE: We don't want to normalize the path as the URL
 			self.requires.append(("css:file", path))
 		else:
-			self.requires.append(("css:module", self.normpath(path)))
+			self.requires.append(("css:module", path))
 
 # -----------------------------------------------------------------------------
 #
@@ -563,7 +574,7 @@ class Block(LineParser):
 				self.requires += [("{0}:file".format(_.rsplit(".",1)[-1]), _.strip()) for _ in params.split(" ") if _.strip()]
 			elif name == "component":
 				# TODO: Strip binding and attributes
-				self.requires += [("component", _.strip()) for _ in params.split(" ") if _.strip()]
+				self.requires += [("component", _.strip()) for _ in params.split("{",1)[0].strip().split(" ") if _.strip()]
 			# TODO: Texto
 			if parser:
 				parser.parse("\n".join(lines), path=path)
@@ -624,7 +635,6 @@ class Component(LineParser):
 	def resolve( self, item, path, dirs=(), verbose=False ):
 		return self.Resolve(item, path, dirs)
 
-
 # -----------------------------------------------------------------------------
 #
 # DEPENDENCIES
@@ -671,7 +681,9 @@ class Tracker(object):
 			"requires":self._sortRequires(self.requires)
 		}
 
-	def _fromPath( self, path, recursive=False, type=None ):
+
+	# NOTE: isDependency is set to True ewhen recursing
+	def _fromPath( self, path, recursive=False, type=None, isDependency=False ):
 		"""Helper function of the `Tracker.fromPath` method. Gets a parser
 		for the given file type, parses the file at the given path and
 		merges the `Parser.provides`/`Parser.requires`.
@@ -701,7 +713,12 @@ class Tracker(object):
 				return
 			# We do the parsing, merging back the provided and required elements.
 			parser      = parser_type().parsePath(path, type=type)
-			self.provides.append((path, parser.provides))
+			if isDependency:
+				# If the currently parsed file was a dependency, then we 
+				# don't merge the provides, but add the provides as dependencies.
+				self._merge(self.requires, parser.provides)
+			else:
+				self.provides.append((path, parser.provides))
 			self.requires = self._merge(self.requires, parser.requires)
 			# We register/update the provided nodes
 			for name in parser.provides:
@@ -719,13 +736,13 @@ class Tracker(object):
 					# if not resolved and "://" not in dependency[1]:
 					# 	logging.error("Cannot recurse on {0} in {1}: dependency {0} cannot be resolved".format(dependency, path))
 					for dependency_type, dependency_path in resolved:
-						self._fromPath(dependency_path, recursive=recursive, type=dependency_type)
+						self._fromPath(dependency_path, recursive=recursive, type=dependency_type, isDependency=True)
 
 	# FIXME: Architecturally, this is a helper function and should be moved
 	# out of the class if used elsewhere.
 	def _merge( self, a, b ):
-		"""Merges the elemetns of B into A, only if the elements
-		are not arelady in A."""
+		"""Merges the elements of B into A, only if the elements
+		are not already in A."""
 		for e in b:
 			if e not in a:
 				a.append(e)
@@ -798,11 +815,13 @@ class Resolver(object):
 		path    = path or os.getcwd()
 		if isinstance(elements, str) or isinstance(elements, unicode): elements=[elements]
 		for element in elements:
-			if isinstance(element, tuple): element = element[1]
+			element_type = None
+			if isinstance(element, tuple): element_type, element = element
+			if element_type == "*": element_type = None
 			for t,p in parsers:
 				matches.setdefault(element,[])
 				# We ensure an element is not present twice
-				for _ in p.resolve((None,element), path, self.paths):
+				for _ in p.resolve((element_type,element), path, self.paths):
 					if _ not in matches[element]:
 						matches[element].append(_)
 		return matches
@@ -867,15 +886,31 @@ def find( args, recursive=True, resolve=False ):
 def list( args, recursive=True, resolve=False ):
 	"""Lists all the dependencies listed in the given files."""
 	deps = Tracker()
+	rsl  = Resolver()
 	res  = {}
 	if isinstance(args, str) or isinstance(args, unicode): args = [args]
 	for _ in args:
-		r = (deps.fromPath(_, recursive=recursive))
+		r_symbols = (deps.fromPath(_, recursive=recursive))
 		if not res:
-			res = r
+			res = r_symbols
 		else:
-			res.update(r)
-	return res.get("requires") or ()
+			res.update(r_symbols)
+	req_symbols = res.get("requires") or ()
+	if not resolve:
+		return req_symbols
+	else:
+		paths = []
+		for sym in req_symbols:
+			sym_name = sym[1]
+			resolved  = rsl.find(sym)
+			for k in resolved:
+				# FIXME: I'm not sure why there is a "*" in there
+				if k == "*":
+					continue
+				for s,p in resolved[k]:
+					if p not in paths:
+						paths.append(p)
+		return paths
 
 
 # EOF - vim: ts=4 sw=4 noet
