@@ -301,10 +301,10 @@ class Sugar(LineParser):
 	def onParseEnd( self, path, type=None ):
 		pass
 		# if self.version == 1:
-		# 	self.requires.insert(0, (self.type or "js:module", "extend"))
+		# 	self.requires.insert(0, (self.type or "sjs:module", "extend"))
 
 	def onModule( self, line, match ):
-		self.provides.append((self.type or "js:module",match.group(1)))
+		self.provides.append((self.type or "sjs:module",match.group(1)))
 
 	def onSugar2( self, line, match ):
 		self.version = 2
@@ -315,7 +315,7 @@ class Sugar(LineParser):
 		for _ in line.split(","):
 			_ = _.strip().split()[0]
 			if _:
-				self.requires.append((self.type or "js:module",_))
+				self.requires.append((self.type or "sjs:module",_))
 
 # -----------------------------------------------------------------------------
 #
